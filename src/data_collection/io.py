@@ -7,7 +7,7 @@ from scipy.spatial.transform import Rotation as R
 
 from src.visualization.render_mp4 import pickle_data
 from src.common.types import Trajectory, Observation
-from src.common.geometry import np_action_6d_to_quat
+from src.common.geometry import np_action_rot_6d_to_quat_xyzw
 
 from ipdb import set_trace as bp
 
@@ -43,7 +43,7 @@ def save_raw_rollout(
 
         assert actions.shape[1] == 10
         # If we've used rot_6d convert to quat
-        actions = np_action_6d_to_quat(actions)
+        actions = np_action_rot_6d_to_quat_xyzw(actions)
         assert actions.shape[1] == 8
 
         # Get the action quat

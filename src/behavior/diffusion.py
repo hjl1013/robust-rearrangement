@@ -1,5 +1,5 @@
 from collections import deque
-from src.common.geometry import proprioceptive_quat_to_6d_rotation
+from src.common.geometry import proprioceptive_quat_xyzw_to_rot_6d
 from omegaconf import DictConfig
 from src.models.vision import DualInputAttentionPool2d
 import torch
@@ -256,7 +256,7 @@ class AttentionPoolDiffusionPolicy(DiffusionPolicy):
         robot_state = torch.cat([o["robot_state"].unsqueeze(1) for o in obs], dim=1)
 
         # Convert the robot_state to use rot_6d instead of quaternion
-        robot_state = proprioceptive_quat_to_6d_rotation(robot_state)
+        robot_state = proprioceptive_quat_xyzw_to_rot_6d(robot_state)
 
         # Normalize the robot_state
         nrobot_state = self.normalizer(robot_state, "robot_state", forward=True)

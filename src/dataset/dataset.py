@@ -329,7 +329,7 @@ class ImageDataset(torch.utils.data.Dataset):
             # Each action in the chunk will be relative to the current EE pose
             curr_ee_pos = nsample["robot_state"][-1, :3]
             curr_ee_6d = nsample["robot_state"][-1, 3:9]
-            curr_ee_quat_xyzw = C.rotation_6d_to_quaternion_xyzw(curr_ee_6d)
+            curr_ee_quat_xyzw = C.rot_6d_to_quat_xyzw(curr_ee_6d)
 
             # Calculate the relative pos action (the actions are absolute poses to begin with)
             nsample["action"][:, :3] = nsample["action"][:, :3] - curr_ee_pos
@@ -341,15 +341,13 @@ class ImageDataset(torch.utils.data.Dataset):
                 print("Relative pos action has NaN or elements bigger than 1")
 
             # Calculate the relative rot action
-            action_quat_xyzw = C.rotation_6d_to_quaternion_xyzw(
-                nsample["action"][:, 3:9]
-            )
+            action_quat_xyzw = C.rot_6d_to_quat_xyzw(nsample["action"][:, 3:9])
 
             # Want a quaternion such that if it's applied to the current EE pose, it will result in the action (absolute pose)
             # This is the same as the relative rotation between the current EE pose and the action
             # curr_quat * rel_quat = action_quat_xyzw -> rel_quat = curr_quat^-1 * action_quat_xyzw
-            action_quat_xyzw = C.quaternion_multiply(
-                C.quaternion_invert(curr_ee_quat_xyzw), action_quat_xyzw
+            action_quat_xyzw = C.quat_xyzw_multiply(
+                C.quat_xyzw_invert(curr_ee_quat_xyzw), action_quat_xyzw
             )
 
             nsample["action"][:, 3:9] = C.quaternion_to_rotation_6d(action_quat_xyzw)
@@ -471,7 +469,7 @@ class StateDataset(torch.utils.data.Dataset):
 
             # Get the robot state
             ee_pos = robot_state[:, None, :3]
-            ee_quat_xyzw = C.rot_6d_to_isaac_quat(robot_state[:, 3:9]).view(N, 1, 4)
+            ee_quat_xyzw = C.rot_6d_to_quat_xyzw(robot_state[:, 3:9]).view(N, 1, 4)
             ee_pose = torch.cat([ee_pos, ee_quat_xyzw], dim=-1)
 
             # Reshape the parts poses into (N, P, 7)

@@ -17,9 +17,9 @@ from src.common.types import Trajectory
 from src.common.files import get_processed_path, get_raw_paths
 from src.visualization.render_mp4 import unpickle_data
 from src.common.geometry import (
-    np_proprioceptive_quat_to_6d_rotation,
-    np_action_quat_to_6d_rotation,
-    np_apply_quat,
+    np_proprioceptive_quat_xyzw_to_rot_6d,
+    np_action_quat_xyzw_to_rot_6d,
+    np_apply_quat_xyzw,
 )
 from src.data_processing.utils import resize, resize_crop
 from src.data_processing.utils import clip_quat_xyzw_magnitude
@@ -51,16 +51,14 @@ def initialize_zarr_store(out_path, full_data_shapes, chunksize=32):
             )
         elif dtype == object:
             z.create_dataset(
-            name,
-            shape=shape,
-            dtype=dtype,
-            chunks=shape,
-            object_codec=JSON(),
+                name,
+                shape=shape,
+                dtype=dtype,
+                chunks=shape,
+                object_codec=JSON(),
             )
         else:
-            z.create_dataset(
-            name, shape=shape, dtype=dtype, chunks=shape
-            )
+            z.create_dataset(name, shape=shape, dtype=dtype, chunks=shape)
 
     return z
 
@@ -123,7 +121,7 @@ def process_pickle_file(
     else:
         robot_state_quat = np.array([o["robot_state"] for o in obs], dtype=np.float32)
 
-    robot_state_6d = np_proprioceptive_quat_to_6d_rotation(robot_state_quat)
+    robot_state_6d = np_proprioceptive_quat_xyzw_to_rot_6d(robot_state_quat)
     parts_poses = (
         np.array([o["parts_poses"] for o in obs], dtype=np.float32)
         if "parts_poses" in obs[0]
@@ -148,13 +146,13 @@ def process_pickle_file(
         action_pos = np.concatenate(
             [
                 robot_state_quat[:, :3] + action_delta_quat[:, :3],
-                np_apply_quat(robot_state_quat[:, 3:7], action_delta_quat[:, 3:7]),
+                np_apply_quat_xyzw(robot_state_quat[:, 3:7], action_delta_quat[:, 3:7]),
                 # Append the gripper action
                 action_delta_quat[:, -1:],
             ],
             axis=1,
         )
-        action_pos_6d = np_action_quat_to_6d_rotation(action_pos)
+        action_pos_6d = np_action_quat_xyzw_to_rot_6d(action_pos)
 
     else:
         raise NotImplementedError(
@@ -162,7 +160,7 @@ def process_pickle_file(
         )
 
     # Convert delta action to use 6D rotation
-    action_delta_6d = np_action_quat_to_6d_rotation(action_delta_quat)
+    action_delta_6d = np_action_quat_xyzw_to_rot_6d(action_delta_quat)
 
     # Extract the rewards and skills from the pickle file
     reward = (

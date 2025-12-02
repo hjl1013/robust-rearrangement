@@ -2,7 +2,7 @@ from collections import deque
 import hydra
 from omegaconf import DictConfig
 from src.behavior.diffusion import DiffusionPolicy
-from src.common.geometry import proprioceptive_quat_to_6d_rotation
+from src.common.geometry import proprioceptive_quat_xyzw_to_rot_6d
 from src.models.residual import ResidualPolicy
 import torch
 import torch.nn as nn
@@ -167,7 +167,7 @@ class ResidualDiffusionPolicy(DiffusionPolicy):
 
         # Make the robot state have 6D proprioception
         if robot_state.shape[-1] == 14:
-            robot_state = proprioceptive_quat_to_6d_rotation(robot_state)
+            robot_state = proprioceptive_quat_xyzw_to_rot_6d(robot_state)
 
         robot_state = self.normalizer(robot_state, "robot_state", forward=True)
         parts_poses = self.normalizer(parts_poses, "parts_poses", forward=True)

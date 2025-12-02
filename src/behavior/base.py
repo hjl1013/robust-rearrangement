@@ -11,7 +11,7 @@ from src.dataset.normalizer import LinearNormalizer
 from src.models import get_encoder
 
 from ipdb import set_trace as bp  # noqa
-from src.common.geometry import proprioceptive_quat_to_6d_rotation
+from src.common.geometry import proprioceptive_quat_xyzw_to_rot_6d
 from src.common.vision import FrontCameraTransform, WristCameraTransform
 
 import src.common.geometry as C
@@ -250,7 +250,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         # Convert the robot_state to use rot_6d instead of quaternion
         # TODO: Change this so the environment outputs 6D rotation instead when that's the chosen control mode
         if robot_state.shape[-1] == 14:
-            robot_state = proprioceptive_quat_to_6d_rotation(robot_state)
+            robot_state = proprioceptive_quat_xyzw_to_rot_6d(robot_state)
 
         robot_state[..., :3] *= int(self.include_proprioceptive_pos)
         robot_state[..., 3:9] *= int(self.include_proprioceptive_ori)
@@ -354,18 +354,18 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             action_pred[:, :, :3] += curr_pos[:, None, :]
 
             # Each action in the chunk will be relative to the current EE pose
-            curr_ori_quat_xyzw = C.rotation_6d_to_quaternion_xyzw(curr_ori_6d)
+            curr_ori_quat_xyzw = C.rot_6d_to_quat_xyzw(curr_ori_6d)
 
             # Calculate the relative rot action
-            action_quat_xyzw = C.rotation_6d_to_quaternion_xyzw(action_pred[:, :, 3:9])
+            action_quat_xyzw = C.rot_6d_to_quat_xyzw(action_pred[:, :, 3:9])
 
             # Apply the relative quat on top of the current quat to get the absolute quat
-            action_quat_xyzw = C.quaternion_multiply(
+            action_quat_xyzw = C.quat_xyzw_multiply(
                 curr_ori_quat_xyzw[:, None], action_quat_xyzw
             )
 
             # Convert the absolute quat to 6D rotation
-            action_pred[:, :, 3:9] = C.quaternion_xyzw_to_rotation_6d(action_quat_xyzw)
+            action_pred[:, :, 3:9] = C.quat_xyzw_to_rot_6d(action_quat_xyzw)
 
         # Add the actions to the queue
         # only take action_horizon number of actions
@@ -435,7 +435,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             # Add noise to the robot state akin to Ke et al., “Grasping with Chopsticks.”
             # Extract only the current position and orientation (x, y, x and 6D rotation)
             pos = nrobot_state[:, :, :3]
-            rot_mat = C.rotation_6d_to_matrix(nrobot_state[:, :, 3:9])
+            rot_mat = C.rot_6d_to_matrix(nrobot_state[:, :, 3:9])
             rot = C.matrix_to_euler_angles(rot_mat, "XYZ")
 
             # Add noise to the position with variance of of 1 cm
@@ -445,9 +445,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             d_rot = torch.randn_like(rot) * 0.1
 
             # Apply the noise rotation to the current rotation
-            rot = C.matrix_to_rotation_6d(
-                rot_mat @ C.euler_angles_to_matrix(d_rot, "XYZ")
-            )
+            rot = C.matrix_to_rot_6d(rot_mat @ C.euler_angles_to_matrix(d_rot, "XYZ"))
 
             # In 20% of observations, we now the noised position and rotation to the robot state
             mask = torch.rand(B) < 0.2

@@ -249,7 +249,7 @@ class DualFrankaEnv(gym.Env):
         mat[:3, 3] = learnable[:3]
 
         # Add the rotation
-        mat[:3, :3] = C.np_rotation_6d_to_matrix(learnable[3:9])
+        mat[:3, :3] = C.np_rot_6d_to_matrix(learnable[3:9])
 
         return mat
 
@@ -292,7 +292,7 @@ class DualFrankaEnv(gym.Env):
         Convert a 4x4 matrix to a learnable representation.
         """
         pos = mat[:3, 3]
-        rot = C.np_matrix_to_rotation_6d(mat[:3, :3])
+        rot = C.np_matrix_to_rot_6d(mat[:3, :3])
 
         return pos, rot
 

@@ -2,7 +2,7 @@
 from pathlib import Path
 import furniture_bench  # noqa
 
-from furniture_bench.controllers.control_utils import proprioceptive_quat_to_6d_rotation
+from src.common.geometry import quat_xyzw_to_rot_6d
 from ipdb import set_trace as bp
 
 
@@ -428,9 +428,7 @@ def main(cfg: DictConfig):
             first_done_mask = success_dones.cumsum(dim=0) > 1
             success_dones[first_done_mask] = False
 
-            success_robot_states = proprioceptive_quat_to_6d_rotation(
-                success_robot_states
-            )
+            success_robot_states = quat_xyzw_to_rot_6d(success_robot_states)
 
             success_actions = normalizer(success_actions, "action", forward=True)
 
