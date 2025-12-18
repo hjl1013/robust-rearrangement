@@ -119,3 +119,6 @@ tmp
 
 logs/
 scene.xml
+
+sync_from_kaist4.sh
+sync_from_kaist3090.sh
