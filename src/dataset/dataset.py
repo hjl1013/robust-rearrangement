@@ -641,3 +641,482 @@ class StateDataset(torch.utils.data.Dataset):
             self.train_data[key] = torch.cat(data_slices)
 
         self.episode_ends = torch.tensor(self.episode_ends)
+
+
+class ImageReverseDataset(torch.utils.data.Dataset):
+    """
+    Reverse dataset for image-based observations.
+    Takes observations at times [t-obs_horizon+1, ..., t] and predicts past actions: t-1, t-2, ..., t-pred_horizon
+    """
+    def __init__(
+        self,
+        dataset_paths: Union[List[Path], Path],
+        pred_horizon: int,
+        obs_horizon: int,
+        action_horizon: int,
+        data_subset: Optional[int] = None,
+        predict_past_actions: bool = False,  # Not used for reverse, but kept for compatibility
+        control_mode: ControlMode = ControlMode.delta,
+        pad_after: bool = True,
+        max_episode_count: Union[dict, None] = None,
+        minority_class_power: bool = False,
+        load_into_memory: bool = True,
+    ):
+        self.pred_horizon = pred_horizon
+        self.action_horizon = action_horizon
+        self.obs_horizon = obs_horizon
+        self.control_mode = control_mode
+        self.minority_class_power = minority_class_power
+
+        self.normalizer = LinearNormalizer()
+
+        # The dataset only has `delta/pos` control modes, use pos if `relative` is selected
+        control_mode = "pos" if control_mode == ControlMode.relative else control_mode
+
+        self.non_image_keys = ["robot_state", "action/pos", "action/delta", "skill"]
+        self.image_keys = [
+            "color_image1",
+            "color_image2",
+        ]
+        self.load_into_memory = load_into_memory
+        
+        if self.load_into_memory:
+            # Read from zarr dataset (images and non-image data)
+            combined_data, metadata = combine_zarr_datasets(
+                dataset_paths,
+                self.non_image_keys + self.image_keys,
+                max_episodes=data_subset,
+                max_ep_cnt=max_episode_count,
+            )
+        else:
+            # Read non-image data into memory
+            combined_data, metadata = combine_zarr_datasets(
+                dataset_paths,
+                self.non_image_keys,
+                max_episodes=data_subset,
+                max_ep_cnt=max_episode_count,
+            )
+            # Open the zarr datasets in read mode
+            self.dataset_paths = dataset_paths
+            self.zarr_datasets = [zarr.open(path, mode="r") for path in dataset_paths]
+            self.zarr_ci1 = [zd["color_image1"] for zd in self.zarr_datasets]
+            self.zarr_ci2 = [zd["color_image2"] for zd in self.zarr_datasets]
+
+        self.episode_ends = combined_data["episode_ends"]
+        self.metadata = metadata
+        print(f"Loading reverse dataset of {len(self.episode_ends)} episodes:")
+        for path, data in metadata.items():
+            print(
+                f"  {path}: {data['n_episodes_used']} episodes, {data['n_frames_used']}"
+            )
+
+        self.train_data = {
+            "robot_state": torch.from_numpy(combined_data["robot_state"]),
+            "action": torch.from_numpy(combined_data[f"action/{control_mode}"]),
+        }
+
+        # Fit the normalizer to the data
+        self.normalizer.fit(self.train_data)
+
+        if self.control_mode == ControlMode.relative:
+            max_delta_action = np.max(np.abs(combined_data["action/delta"][:, :3]))
+            self.normalizer.stats.action.min[:3] = -max_delta_action * pred_horizon
+            self.normalizer.stats.action.max[:3] = max_delta_action * pred_horizon
+            self.normalizer.stats.action.min[3:] = -1.0
+            self.normalizer.stats.action.max[3:] = 1.0
+            self.normalizer.stats.robot_state.min[:9] = -1.0
+            self.normalizer.stats.robot_state.max[:9] = 1.0
+        else:
+            # Normalize data to [-1,1] only when action mode is not relative
+            for key in self.normalizer.keys():
+                self.train_data[key] = self.normalizer(
+                    self.train_data[key], key, forward=True
+                )
+
+        # Add the color images to the train_data
+        if self.load_into_memory:
+            self.train_data["color_image1"] = torch.from_numpy(
+                combined_data["color_image1"]
+            ).permute(0, 3, 1, 2)
+            self.train_data["color_image2"] = torch.from_numpy(
+                combined_data["color_image2"]
+            ).permute(0, 3, 1, 2)
+
+        self.train_data["zarr_idx"] = torch.from_numpy(combined_data["zarr_idx"])
+        self.train_data["within_zarr_idx"] = torch.from_numpy(
+            combined_data["within_zarr_idx"]
+        )
+
+        # For reverse: we need obs_horizon observations ending at t and pred_horizon actions before t
+        # Sequence length needs to accommodate both: max(obs_horizon, pred_horizon + 1)
+        self.sequence_length = max(obs_horizon, pred_horizon + 1)
+        
+        # Create indices: we need to ensure we have enough history before each sample
+        # pad_before needs to be max(obs_horizon - 1, pred_horizon) to have enough history
+        self.indices = create_sample_indices(
+            episode_ends=self.episode_ends,
+            sequence_length=self.sequence_length,
+            pad_before=max(obs_horizon - 1, pred_horizon),
+            pad_after=action_horizon - 1 if pad_after else 0,
+        )
+
+        self.n_samples = len(self.indices)
+
+        task_key = "task" if "task" in combined_data else "furniture"
+        self.successes = combined_data["success"].astype(np.uint8)
+        self.skills = combined_data["skill"].astype(np.uint8)
+        self.failure_idx = combined_data["failure_idx"]
+        self.domain = combined_data["domain"]
+
+        # Add action and observation dimensions to the dataset
+        self.action_dim = self.train_data["action"].shape[-1]
+        self.robot_state_dim = self.train_data["robot_state"].shape[-1]
+        
+        # Set the limits for the action indices (for reverse, actions are before the observation)
+        # We predict actions [t-1, t-2, ..., t-pred_horizon], which will be extracted and reversed in __getitem__
+        self.first_action_idx = 0  # Will be adjusted in __getitem__
+        self.final_action_idx = self.sequence_length - 1  # Exclude the last timestep (observation at t)
+        
+        if self.minority_class_power:
+            sim_indices = []
+            real_indices = []
+            for i, (_, _, _, _, demo_idx) in enumerate(self.indices):
+                if self.domain[demo_idx] == 0:
+                    sim_indices.append(i)
+                else:
+                    real_indices.append(i)
+            sim_indices = np.array(sim_indices)
+            real_indices = np.array(real_indices)
+            sim_samples = len(sim_indices)
+            real_samples = len(real_indices)
+            class_samples = np.array([sim_samples, real_samples])
+            total_samples = len(self.indices)
+            print(
+                f"Ratio of real to sim samples before upsampling: {real_samples/sim_samples:.2f}"
+            )
+            class_weights = np.power(class_samples, 1 / minority_class_power)
+            class_weights = class_weights / np.sum(class_weights)
+            desired_class_samples = total_samples * class_weights
+            print(
+                f"Ratio of real to sim samples after upsampling: {desired_class_samples[1]/desired_class_samples[0]:.2f}"
+            )
+            minority_class = np.argmin(class_samples)
+            additional_samples_needed = int(
+                desired_class_samples[minority_class] - class_samples[minority_class]
+            )
+            if additional_samples_needed > 0:
+                additional_indices = np.random.choice(
+                    real_indices,
+                    size=additional_samples_needed,
+                    replace=True,
+                )
+                additional_samples = self.indices[additional_indices]
+                self.indices = np.concatenate((self.indices, additional_samples))
+
+    def set_normalizer(self, normalizer: LinearNormalizer):
+        self.normalizer.load_state_dict(normalizer.state_dict())
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        # get the start/end indices for this datapoint
+        (
+            buffer_start_idx,
+            buffer_end_idx,
+            sample_start_idx,
+            sample_end_idx,
+            demo_idx,
+        ) = self.indices[idx]
+
+        # get normalized data using these indices
+        nsample = sample_sequence(
+            train_data=self.train_data,
+            sequence_length=self.sequence_length,
+            buffer_start_idx=buffer_start_idx,
+            buffer_end_idx=buffer_end_idx,
+            sample_start_idx=sample_start_idx,
+            sample_end_idx=sample_end_idx,
+        )
+        
+        if not self.load_into_memory:
+            zarr_idx = nsample["zarr_idx"][0]
+            within_zarr_idx_start = nsample["within_zarr_idx"][-1].item()  # Current observation is last
+            within_zarr_idx_end = within_zarr_idx_start + 1
+            nsample["color_image1"] = torch.from_numpy(
+                self.zarr_ci1[zarr_idx][within_zarr_idx_start:within_zarr_idx_end]
+            ).permute(0, 3, 1, 2)
+            nsample["color_image2"] = torch.from_numpy(
+                self.zarr_ci2[zarr_idx][within_zarr_idx_start:within_zarr_idx_end]
+            ).permute(0, 3, 1, 2)
+
+        # For reverse: take obs_horizon observations ending at t (last obs_horizon timesteps)
+        nsample["color_image1"] = nsample["color_image1"][-self.obs_horizon:, :]
+        nsample["color_image2"] = nsample["color_image2"][-self.obs_horizon:, :]
+        nsample["robot_state"] = nsample["robot_state"][-self.obs_horizon:, :]
+
+        # For reverse: take past actions [t-1, t-2, ..., t-pred_horizon]
+        # The sequence contains [t-seq_len+1, ..., t-1, t]
+        # We want actions at [t-1, t-2, ..., t-pred_horizon] (most recent first)
+        # Actions are in chronological order, so we take the last pred_horizon actions before t and reverse
+        past_actions = nsample["action"][-self.pred_horizon-1:-1, :]  # Actions from [t-pred_horizon, ..., t-1]
+        # Reverse to get most recent first: [t-1, t-2, ..., t-pred_horizon]
+        nsample["action"] = torch.flip(past_actions, dims=[0]).clone()
+
+        if self.control_mode == ControlMode.relative:
+            curr_ee_pos = nsample["robot_state"][-1, :3]
+            curr_ee_6d = nsample["robot_state"][-1, 3:9]
+            curr_ee_quat_xyzw = C.rot_6d_to_quat_xyzw(curr_ee_6d)
+            nsample["action"][:, :3] = nsample["action"][:, :3] - curr_ee_pos
+            if torch.any(torch.isnan(nsample["action"][:, :3])) or torch.any(
+                torch.abs(nsample["action"][:, :3]) > 1.0
+            ):
+                print("Relative pos action has NaN or elements bigger than 1")
+            action_quat_xyzw = C.rot_6d_to_quat_xyzw(nsample["action"][:, 3:9])
+            action_quat_xyzw = C.quat_xyzw_multiply(
+                C.quat_xyzw_invert(curr_ee_quat_xyzw), action_quat_xyzw
+            )
+            nsample["action"][:, 3:9] = C.quaternion_to_rotation_6d(action_quat_xyzw)
+            nsample["action"] = self.normalizer(
+                nsample["action"], "action", forward=True
+            )
+            nsample["robot_state"] = self.normalizer(
+                nsample["robot_state"], "robot_state", forward=True
+            )
+
+        nsample["success"] = torch.IntTensor([self.successes[demo_idx]])
+        nsample["domain"] = torch.IntTensor([self.domain[demo_idx]])
+
+        return nsample
+
+    def train(self):
+        pass
+
+    def eval(self):
+        pass
+
+
+class StateReverseDataset(torch.utils.data.Dataset):
+    """
+    Reverse dataset for state-based observations.
+    Takes observations at times [t-obs_horizon+1, ..., t] and predicts past actions: t-1, t-2, ..., t-pred_horizon
+    """
+    def __init__(
+        self,
+        dataset_paths: Union[List[Path], Path],
+        pred_horizon: int,
+        obs_horizon: int,
+        action_horizon: int,
+        data_subset: int = None,
+        predict_past_actions: bool = False,  # Not used for reverse, but kept for compatibility
+        control_mode: ControlMode = ControlMode.delta,
+        pad_after: bool = True,
+        max_episode_count: Union[dict, None] = None,
+        task: str = None,
+        add_relative_pose: bool = False,
+        normalizer: Optional[LinearNormalizer] = None,
+        include_future_obs: bool = False,  # Not used for reverse, but kept for compatibility
+    ):
+        self.pred_horizon = pred_horizon
+        self.action_horizon = action_horizon
+        self.obs_horizon = obs_horizon
+        self.predict_past_actions = predict_past_actions
+        self.control_mode = control_mode
+        self.include_future_obs = include_future_obs
+
+        # Read from zarr dataset
+        combined_data, metadata = combine_zarr_datasets(
+            dataset_paths,
+            [
+                "parts_poses",
+                "robot_state",
+                f"action/{control_mode}",
+            ],
+            max_episodes=data_subset,
+            max_ep_cnt=max_episode_count,
+        )
+
+        self.episode_ends: np.ndarray = combined_data["episode_ends"]
+        self.metadata = metadata
+        print(f"Loading reverse dataset of {len(self.episode_ends)} episodes:")
+        for path, data in metadata.items():
+            print(
+                f"  {path}: {data['n_episodes_used']} episodes, {data['n_frames_used']}"
+            )
+
+        # Get the data and convert to torch tensors
+        robot_state = torch.from_numpy(combined_data["robot_state"])
+        action = torch.from_numpy(combined_data[f"action/{control_mode}"])
+        parts_poses = torch.from_numpy(combined_data["parts_poses"])
+
+        self.train_data = {
+            "parts_poses": parts_poses,
+            "robot_state": robot_state,
+            "action": action,
+        }
+
+        # Fit the normalizer to the data
+        self.normalizer = LinearNormalizer()
+        if normalizer is None:
+            self.normalizer.fit(self.train_data)
+        else:
+            self.normalizer.load_state_dict(normalizer.state_dict())
+            self.normalizer.cpu()
+
+        if task == "place-tabletop":
+            self._make_tabletop_goal()
+
+        # Normalize data to [-1,1]
+        for key in self.normalizer.keys():
+            self.train_data[key] = self.normalizer(
+                self.train_data[key], key, forward=True
+            )
+
+        # Concatenate the robot_state and parts_poses into a single observation
+        self.train_data["obs"] = torch.cat(
+            [self.train_data["robot_state"], self.train_data["parts_poses"]], dim=-1
+        )
+
+        # Add parts poses relative to the end-effector as a new key in the train_data
+        if add_relative_pose:
+            parts_poses, robot_state = (
+                self.train_data["parts_poses"],
+                self.train_data["robot_state"],
+            )
+            N = parts_poses.shape[0]
+            n_parts = parts_poses.shape[1] // 7
+            ee_pos = robot_state[:, None, :3]
+            ee_quat_xyzw = C.rot_6d_to_quat_xyzw(robot_state[:, 3:9]).view(N, 1, 4)
+            ee_pose = torch.cat([ee_pos, ee_quat_xyzw], dim=-1)
+            parts_pose = parts_poses.view(N, n_parts, 7)
+            rel_pose = C.pose_error(ee_pose, parts_pose)
+            self.train_data["rel_poses"] = rel_pose.view(N, -1)
+            self.train_data["obs"] = torch.cat(
+                [self.train_data["obs"], self.train_data["rel_poses"]], dim=-1
+            )
+
+        # Recalculate the rewards and returns
+        rewards = torch.zeros_like(self.train_data["robot_state"][:, 0])
+        rewards[self.episode_ends - 1] = 1.0
+        gamma = 0.99
+        returns = []
+        ee = [0] + self.episode_ends.tolist()
+        for start, end in zip(ee[:-1], ee[1:]):
+            ep_rewards = rewards[start:end]
+            timesteps = torch.arange(len(ep_rewards), device=ep_rewards.device)
+            discounts = gamma**timesteps
+            ep_returns = (
+                torch.flip(
+                    torch.cumsum(torch.flip(ep_rewards * discounts, dims=[0]), dim=0),
+                    dims=[0],
+                )
+                / discounts
+            )
+            returns.append(ep_returns)
+        returns = torch.cat(returns)
+        self.train_data["returns"] = returns
+
+        # For reverse: we need obs_horizon observations ending at t and pred_horizon actions before t
+        # Sequence length needs to accommodate both: max(obs_horizon, pred_horizon + 1)
+        self.sequence_length = max(obs_horizon, pred_horizon + 1)
+        
+        # Create indices: we need to ensure we have enough history before each sample
+        # pad_before needs to be max(obs_horizon - 1, pred_horizon) to have enough history
+        self.indices = create_sample_indices(
+            episode_ends=self.episode_ends,
+            sequence_length=self.sequence_length,
+            pad_before=max(obs_horizon - 1, pred_horizon),
+            pad_after=action_horizon - 1 if pad_after else 0,
+        )
+
+        self.n_samples = len(self.indices)
+
+        task_key = "task" if "task" in combined_data else "furniture"
+        self.successes = combined_data["success"].astype(np.uint8)
+        self.failure_idx = combined_data["failure_idx"]
+
+        # Add action, robot_state, and parts_poses dimensions to the dataset
+        self.action_dim = self.train_data["action"].shape[-1]
+        self.robot_state_dim = self.train_data["robot_state"].shape[-1]
+        self.parts_poses_dim = self.train_data["parts_poses"].shape[-1]
+        self.obs_dim = (self.robot_state_dim + self.parts_poses_dim) * self.obs_horizon
+
+        del self.train_data["robot_state"]
+        del self.train_data["parts_poses"]
+        if add_relative_pose:
+            del self.train_data["rel_poses"]
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        # get the start/end indices for this datapoint
+        (
+            buffer_start_idx,
+            buffer_end_idx,
+            sample_start_idx,
+            sample_end_idx,
+            demo_idx,
+        ) = self.indices[idx]
+
+        # get normalized data using these indices
+        nsample = sample_sequence(
+            train_data=self.train_data,
+            sequence_length=self.sequence_length,
+            buffer_start_idx=buffer_start_idx,
+            buffer_end_idx=buffer_end_idx,
+            sample_start_idx=sample_start_idx,
+            sample_end_idx=sample_end_idx,
+        )
+
+        # For reverse: take obs_horizon observations ending at t (last obs_horizon timesteps)
+        nsample["obs"] = nsample["obs"][-self.obs_horizon:, :]
+
+        # For reverse: take past actions [t-1, t-2, ..., t-pred_horizon]
+        # The sequence contains [t-seq_len+1, ..., t-1, t]
+        # We want actions at [t-1, t-2, ..., t-pred_horizon] (most recent first)
+        # Actions are in chronological order, so we take the last pred_horizon actions before t and reverse
+        past_actions = nsample["action"][-self.pred_horizon-1:-1, :]  # Actions from [t-pred_horizon, ..., t-1]
+        # Reverse to get most recent first: [t-1, t-2, ..., t-pred_horizon]
+        nsample["action"] = torch.flip(past_actions, dims=[0])
+
+        # Sum up the returns accrued during the action chunk (reversed)
+        past_returns = nsample["returns"][-self.pred_horizon-1:-1]  # Returns from [t-pred_horizon, ..., t-1]
+        reversed_returns = torch.flip(past_returns, dims=[0])
+        nsample["returns"] = reversed_returns.sum()
+
+        return nsample
+
+    def train(self):
+        pass
+
+    def eval(self):
+        pass
+
+    def _make_tabletop_goal(self):
+        ee = np.array([0] + self.episode_ends.tolist())
+        tabletop_goal = torch.tensor([0.0819, 0.2866, -0.0157])
+        new_episode_starts = []
+        new_episode_ends = []
+        curr_cumulate_timesteps = 0
+        self.episode_ends = []
+        for prev_ee, curr_ee in zip(ee[:-1], ee[1:]):
+            for i in range(prev_ee, curr_ee):
+                if torch.allclose(
+                    self.train_data["parts_poses"][i, :3], tabletop_goal, atol=1e-2
+                ):
+                    new_episode_starts.append(prev_ee)
+                    end = i + 10
+                    new_episode_ends.append(end)
+                    curr_cumulate_timesteps += end - prev_ee
+                    self.episode_ends.append(curr_cumulate_timesteps)
+                    break
+
+        for key in self.train_data:
+            data_slices = [
+                self.train_data[key][start:end]
+                for start, end in zip(new_episode_starts, new_episode_ends)
+            ]
+            self.train_data[key] = torch.cat(data_slices)
+
+        self.episode_ends = torch.tensor(self.episode_ends)

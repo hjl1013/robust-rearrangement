@@ -177,3 +177,91 @@ def get_rl_env(
             )
 
         return env
+
+
+def get_rl_reverse_env(
+    gpu_id,
+    task: Task = "one_leg",
+    num_envs=1,
+    randomness="low",
+    max_env_steps=5_000,
+    resize_img=True,
+    observation_space="state",  # Observation space for the robot. Options are 'image' and 'state'.
+    act_rot_repr="quat",
+    action_type="pos",  # Action type for the robot. Options are 'delta' and 'pos'.
+    april_tags=False,
+    verbose=False,
+    headless=True,
+    record=False,
+    concat_robot_state=False,
+    ctrl_mode="diffik",
+    obs_keys=None,
+    dense_reward=False,
+    dense_reward_threshold=0.1,
+    latent_model=None,
+    initial_state_threshold=0.05,
+    **kwargs,
+):
+    """Get reverse RL environment for testing reverse policies.
+    
+    Args:
+        dense_reward: If True, use dense reward based on latent distance to forward trajectory.
+        dense_reward_threshold: Threshold for updating target observation in forward trajectory.
+        latent_model: Actor model for computing latent features (required if dense_reward=True).
+        initial_state_threshold: L2 distance threshold for terminating when close to initial forward trajectory state.
+    """
+    from furniture_bench.envs.furniture_rl_reverse_sim_env import FurnitureRLReverseSimEnv
+
+    if not april_tags:
+        from furniture_bench.envs import furniture_sim_env
+
+        furniture_sim_env.ASSET_ROOT = str(
+            Path(__file__).parent.parent.absolute() / "assets"
+        )
+
+    if obs_keys is None:
+        obs_keys = FULL_OBS
+        if observation_space == "state":
+            # Filter out keys with `image` in them
+            obs_keys = [key for key in obs_keys if "image" not in key]
+
+    if action_type == "relative":
+        print(
+            "[INFO] Using relative actions. This keeps the environment using position actions."
+        )
+    action_type = "pos" if action_type == "relative" else action_type
+
+    if dense_reward and latent_model is None:
+        raise ValueError("latent_model must be provided when dense_reward=True")
+
+    with suppress_all_output(not verbose):
+        env = FurnitureRLReverseSimEnv(
+            furniture=task,
+            num_envs=num_envs,
+            resize_img=resize_img,
+            concat_robot_state=concat_robot_state,
+            headless=headless,
+            obs_keys=obs_keys,
+            compute_device_id=gpu_id,
+            graphics_device_id=gpu_id,
+            init_assembled=False,
+            np_step_out=False,
+            channel_first=False,
+            randomness=randomness,
+            high_random_idx=-1,
+            save_camera_input=False,
+            record=record,
+            max_env_steps=max_env_steps,
+            act_rot_repr=act_rot_repr,
+            ctrl_mode="diffik",
+            action_type=action_type,
+            verbose=verbose,
+            dense_reward=dense_reward,
+            dense_reward_threshold=dense_reward_threshold,
+            latent_model=latent_model,
+            observation_type=observation_space,
+            initial_state_threshold=initial_state_threshold,
+            **kwargs,
+        )
+
+    return env

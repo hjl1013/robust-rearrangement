@@ -170,6 +170,7 @@ def rollout(
     parts_poses = [video_obs["parts_poses"].cpu()]
     actions = list()
     rewards = torch.zeros((env.num_envs, rollout_max_steps), dtype=torch.float32)
+    dones_history = torch.zeros((env.num_envs, rollout_max_steps), dtype=torch.bool, device="cuda")
     done = torch.zeros((env.num_envs, 1), dtype=torch.bool, device="cuda")
 
     step_idx = 0
@@ -214,12 +215,14 @@ def rollout(
 
         # Always store rewards as they are used to calculate success
         rewards[:, step_idx] = reward.squeeze().cpu()
+        dones_history[:, step_idx] = done.squeeze().cpu()
 
         # update progress bar
         step_idx += 1
         if pbar is not None:
             pbar.set_postfix(step=step_idx)
-            n_success = (rewards.sum(dim=1) == n_parts_assemble).sum().item()
+            # n_success = (rewards.sum(dim=1) == n_parts_assemble).sum().item()
+            n_success = dones_history.any(dim=1).sum().item() # (Modified this to use dones instead of rewards)
             pbar.pbar_desc(n_success)
             pbar.update()
 
