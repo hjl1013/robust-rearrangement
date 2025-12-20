@@ -12,7 +12,7 @@ from src.eval.rollout import calculate_success_rate
 from src.behavior import get_actor
 from src.common.tasks import task2idx, task_timeout
 from src.common.files import trajectory_save_dir
-from src.gym import get_rl_env
+from src.gym import get_rl_env, get_rl_reverse_env
 from src.eval.eval_utils import load_model_weights
 
 from typing import Any, List, Optional
@@ -174,6 +174,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", type=str, required=False, nargs="*")
     parser.add_argument("--wt-path", type=str, default=None)
+    parser.add_argument("--reverse", action="store_true")
 
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--n-envs", type=int, default=1)
@@ -440,20 +441,36 @@ if __name__ == "__main__":
 
                 # Only actually load the environment after we know we've got at least one run to evaluate
                 if env is None:
-                    env = get_rl_env(
-                        gpu_id=args.gpu,
-                        task=args.task,
-                        num_envs=args.n_envs,
-                        randomness=args.randomness,
-                        observation_space=args.observation_space,
-                        max_env_steps=5_000,
-                        resize_img=False,
-                        act_rot_repr="rot_6d",
-                        action_type=args.action_type,
-                        april_tags=args.april_tags,
-                        verbose=args.verbose,
-                        headless=not args.visualize,
-                    )
+                    if not args.reverse:
+                        env = get_rl_env(
+                            gpu_id=args.gpu,
+                            task=args.task,
+                            num_envs=args.n_envs,
+                            randomness=args.randomness,
+                            observation_space=args.observation_space,
+                            max_env_steps=5_000,
+                            resize_img=False,
+                            act_rot_repr="rot_6d",
+                            action_type=args.action_type,
+                            april_tags=args.april_tags,
+                            verbose=args.verbose,
+                            headless=not args.visualize,
+                        )
+                    else:
+                        env = get_rl_reverse_env(
+                            gpu_id=args.gpu,
+                            task=args.task,
+                            num_envs=args.n_envs,
+                            randomness=args.randomness,
+                            observation_space=args.observation_space,
+                            max_env_steps=5_000,
+                            resize_img=False,
+                            act_rot_repr="rot_6d",
+                            action_type=args.action_type,
+                            april_tags=args.april_tags,
+                            verbose=args.verbose,
+                            headless=not args.visualize,
+                        )
 
                 # Perform the rollouts
                 print(f"Starting rollout of run: {run.name}")
