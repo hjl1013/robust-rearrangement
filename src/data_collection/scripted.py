@@ -25,10 +25,6 @@ if __name__ == "__main__":
     resize_sim_img = False
 
     data_path = trajectory_save_dir(
-<<<<<<< HEAD
-        controller="diffik",
-=======
->>>>>>> tmp
         domain="sim",
         task=args.furniture,
         demo_source="scripted",
