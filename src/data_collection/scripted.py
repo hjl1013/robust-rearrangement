@@ -14,6 +14,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-failure", action="store_true")
     parser.add_argument("--headless", action="store_true")
 
+    parser.add_argument("--reverse", action="store_true")
     args = parser.parse_args()
 
     # TODO: Consider what we do with images of full size and if that's needed
@@ -24,11 +25,16 @@ if __name__ == "__main__":
     resize_sim_img = False
 
     data_path = trajectory_save_dir(
+<<<<<<< HEAD
         controller="diffik",
+=======
+>>>>>>> tmp
         domain="sim",
         task=args.furniture,
         demo_source="scripted",
         randomness=args.randomness,
+        controller="diffik",
+        suffix="reverse" if args.reverse else "",
     )
 
     print(f"Saving data to directory: {data_path}")
@@ -50,6 +56,7 @@ if __name__ == "__main__":
         graphics_device_id=args.gpu_id,
         ctrl_mode="diffik",
         compress_pickles=True,
+        reverse=args.reverse,
     )
 
     collector.collect()

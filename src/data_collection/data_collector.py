@@ -48,6 +48,7 @@ class DataCollector:
         ctrl_mode: str = "diffik",
         compress_pickles: bool = False,
         verbose: bool = False,
+        reverse: bool = False,
     ):
         """
         Args:
@@ -68,15 +69,39 @@ class DataCollector:
             resize_sim_img (bool): Read resized image
             ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control)
             compress_pickles (bool): Whether to compress the pickle files with gzip.
+            reverse (bool): Whether to collect reverse data.
         """
         if is_sim:
+            start_state = None
+            if reverse:
+                import os
+                import random
+                import lzma
+                self.forward_rollout_dir = os.environ.get("DATA_DIR_FORWARD_ROLLOUT", None)
+                if self.forward_rollout_dir is None:
+                    raise ValueError(
+                        "DATA_DIR_FORWARD_ROLLOUT environment variable must be set to use FurnitureRLReverseSimEnv"
+                    )
+                self.forward_rollout_dir = Path(self.forward_rollout_dir)
+                if not self.forward_rollout_dir.exists():
+                    raise ValueError(f"Forward rollout directory does not exist: {self.forward_rollout_dir}")
+
+                pickle_files = (
+                    list(self.forward_rollout_dir.rglob("*.pkl")) +
+                    list(self.forward_rollout_dir.rglob("*.pkl.xz")) +
+                    list(self.forward_rollout_dir.rglob("*.pkl.gz"))
+                )
+                selected_file = random.choice(pickle_files)
+                with lzma.open(selected_file, "rb") as f:
+                    data = pickle.load(f)
+                    start_state = data["observations"][-1]
             # self.env = gym.make(
-            #     "FurnitureRLReverseSim-v0",
+            #     "FurnitureSimFull-v0",
             #     furniture=furniture,
             #     max_env_steps=sim_config["scripted_timeout"][furniture]
             #     if scripted
             #     else 3000,
-            #     # headless=headless,
+            #     headless=headless,
             #     num_envs=1,  # Only support 1 for now.
             #     manual_done=False if scripted else True,
             #     resize_img=resize_sim_img,
@@ -85,8 +110,9 @@ class DataCollector:
             #     randomness=randomness,
             #     compute_device_id=compute_device_id,
             #     graphics_device_id=graphics_device_id,
-            #     act_rot_repr="quat",
             #     ctrl_mode=ctrl_mode,
+            #     reverse=reverse,
+            #     start_state=start_state
             # )
             from src.gym import get_rl_env, get_rl_reverse_env
             self.env = get_rl_env(
@@ -127,6 +153,7 @@ class DataCollector:
         self.furniture = furniture
         self.num_demos = num_demos
         self.scripted = scripted
+        self.reverse = reverse
 
         self.traj_counter = 0
         self.num_success = 0
@@ -152,7 +179,10 @@ class DataCollector:
         while self.num_success < self.num_demos:
             # Get an action.
             if self.scripted:
-                action, skill_complete = self.env.get_assembly_action()
+                if self.reverse:
+                    action, skill_complete = self.env.get_disassembly_action()
+                else:
+                    action, skill_complete = self.env.get_assembly_action()
                 pos_bounds_m = 0.02 if self.env.ctrl_mode == "diffik" else 0.025
                 ori_bounds_deg = 15 if self.env.ctrl_mode == "diffik" else 20
                 action = scale_scripted_action(
@@ -198,22 +228,34 @@ class DataCollector:
                 n_ob["parts_poses"] = next_obs["parts_poses"]
                 self.obs.append(n_ob)
 
-                if done and not self.env.furnitures[0].all_assembled():
-                    if self.save_failure:
-                        print("Saving failure trajectory.")
-                        collect_enum = CollectEnum.FAIL
-                        obs = self.save_and_reset(collect_enum, {})
+                # Check success based on mode (forward or reverse)
+                if done:
+                    # Use environment's is_success method which handles both forward and reverse modes
+                    success_result = self.env.is_success()
+                    is_task_success = success_result[0]["task"] if isinstance(success_result, list) and len(success_result) > 0 else False
+                    
+                    if not is_task_success:
+                        if self.save_failure:
+                            print("Saving failure trajectory.")
+                            collect_enum = CollectEnum.FAIL
+                            obs = self.save_and_reset(collect_enum, {})
+                        else:
+                            task_description = "disassemble" if self.reverse else "assemble"
+                            print(f"Failed to {task_description} the furniture, reset without saving.")
+                            obs = self.reset()
+                            collect_enum = CollectEnum.SUCCESS
+                        self.num_fail += 1
                     else:
-                        print("Failed to assemble the furniture, reset without saving.")
-                        obs = self.reset()
                         collect_enum = CollectEnum.SUCCESS
-                    self.num_fail += 1
+                        obs = self.save_and_reset(collect_enum, {})
+                        self.num_success += 1
                 else:
-                    if done:
-                        collect_enum = CollectEnum.SUCCESS
-
+                    # Manual collect_enum override (from user input)
                     obs = self.save_and_reset(collect_enum, {})
-                    self.num_success += 1
+                    if collect_enum == CollectEnum.SUCCESS:
+                        self.num_success += 1
+                    else:
+                        self.num_fail += 1
                 self.traj_counter += 1
                 print(f"Success: {self.num_success}, Fail: {self.num_fail}")
                 done = False
