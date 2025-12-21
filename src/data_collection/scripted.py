@@ -24,7 +24,8 @@ if __name__ == "__main__":
     resize_sim_img = False
 
     data_path = trajectory_save_dir(
-        environment="sim",
+        controller="diffik",
+        domain="sim",
         task=args.furniture,
         demo_source="scripted",
         randomness=args.randomness,
@@ -47,7 +48,7 @@ if __name__ == "__main__":
         resize_sim_img=resize_sim_img,
         compute_device_id=args.gpu_id,
         graphics_device_id=args.gpu_id,
-        ctrl_mode="osc",
+        ctrl_mode="diffik",
         compress_pickles=True,
     )
 
