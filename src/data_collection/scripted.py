@@ -51,7 +51,7 @@ if __name__ == "__main__":
         compute_device_id=args.gpu_id,
         graphics_device_id=args.gpu_id,
         ctrl_mode="diffik",
-        compress_pickles=True,
+        compress_pickles=False,
         reverse=args.reverse,
     )
 

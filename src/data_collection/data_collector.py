@@ -72,29 +72,30 @@ class DataCollector:
             reverse (bool): Whether to collect reverse data.
         """
         if is_sim:
-            start_state = None
-            if reverse:
-                import os
-                import random
-                import lzma
-                self.forward_rollout_dir = os.environ.get("DATA_DIR_FORWARD_ROLLOUT", None)
-                if self.forward_rollout_dir is None:
-                    raise ValueError(
-                        "DATA_DIR_FORWARD_ROLLOUT environment variable must be set to use FurnitureRLReverseSimEnv"
-                    )
-                self.forward_rollout_dir = Path(self.forward_rollout_dir)
-                if not self.forward_rollout_dir.exists():
-                    raise ValueError(f"Forward rollout directory does not exist: {self.forward_rollout_dir}")
+            # start_state = None
+            # if reverse:
+            #     import os
+            #     import random
+            #     import lzma
+            #     self.forward_rollout_dir = os.environ.get("DATA_DIR_FORWARD_ROLLOUT", None)
+            #     if self.forward_rollout_dir is None:
+            #         raise ValueError(
+            #             "DATA_DIR_FORWARD_ROLLOUT environment variable must be set to use FurnitureRLReverseSimEnv"
+            #         )
+            #     self.forward_rollout_dir = Path(self.forward_rollout_dir)
+            #     if not self.forward_rollout_dir.exists():
+            #         raise ValueError(f"Forward rollout directory does not exist: {self.forward_rollout_dir}")
 
-                pickle_files = (
-                    list(self.forward_rollout_dir.rglob("*.pkl")) +
-                    list(self.forward_rollout_dir.rglob("*.pkl.xz")) +
-                    list(self.forward_rollout_dir.rglob("*.pkl.gz"))
-                )
-                selected_file = random.choice(pickle_files)
-                with lzma.open(selected_file, "rb") as f:
-                    data = pickle.load(f)
-                    start_state = data["observations"][-1]
+            #     pickle_files = (
+            #         list(self.forward_rollout_dir.rglob("*.pkl")) +
+            #         list(self.forward_rollout_dir.rglob("*.pkl.xz")) +
+            #         list(self.forward_rollout_dir.rglob("*.pkl.gz"))
+            #     )
+            #     selected_file = random.choice(pickle_files)
+            #     print(selected_file)
+            #     with open(selected_file, "rb") as f:
+            #         data = pickle.load(f)
+            #         start_state = data["observations"][-1]
             # self.env = gym.make(
             #     "FurnitureSimFull-v0",
             #     furniture=furniture,
@@ -115,20 +116,36 @@ class DataCollector:
             #     start_state=start_state
             # )
             from src.gym import get_rl_env, get_rl_reverse_env
-            self.env = get_rl_env(
-                gpu_id=compute_device_id,
-                task=furniture,
-                num_envs=1,
-                randomness="low",
-                observation_space="image",
-                max_env_steps=5_000,
-                resize_img=False,
-                act_rot_repr="quat",
-                action_type="delta",
-                april_tags=False,
-                verbose=verbose,
-                headless=headless,
-            )
+            if reverse:
+                self.env = get_rl_reverse_env(
+                    gpu_id=compute_device_id,
+                    task=furniture,
+                    num_envs=1,
+                    randomness="low",
+                    observation_space="image",
+                    max_env_steps=500,
+                    resize_img=False,
+                    act_rot_repr="quat",
+                    action_type="delta",
+                    april_tags=True,
+                    verbose=verbose,
+                    headless=headless,
+                )
+            else:
+                self.env = get_rl_env(
+                    gpu_id=compute_device_id,
+                    task=furniture,
+                    num_envs=1,
+                    randomness="low",
+                    observation_space="image",
+                    max_env_steps=500,
+                    resize_img=False,
+                    act_rot_repr="quat",
+                    action_type="delta",
+                    april_tags=True,
+                    verbose=verbose,
+                    headless=headless,
+                )
         else:
             if randomness == "med":
                 randomness = Randomness.MEDIUM_COLLECT
@@ -233,7 +250,6 @@ class DataCollector:
                     # Use environment's is_success method which handles both forward and reverse modes
                     success_result = self.env.is_success()
                     is_task_success = success_result[0]["task"] if isinstance(success_result, list) and len(success_result) > 0 else False
-                    
                     if not is_task_success:
                         if self.save_failure:
                             print("Saving failure trajectory.")
@@ -317,11 +333,9 @@ class DataCollector:
                 # else:
                 #     ob["color_image1"] = obs["color_image1"]
                 #     ob["color_image2"] = obs["color_image2"]
-                print(obs.keys())
                 ob["color_image1"] = obs["color_image1"]
                 ob["color_image2"] = obs["color_image2"]
                 ob["robot_state"] = obs["robot_state"]
-                
                 ob["parts_poses"] = obs["parts_poses"]
                 self.obs.append(ob)
 
