@@ -250,6 +250,7 @@ class DataCollector:
                     # Use environment's is_success method which handles both forward and reverse modes
                     success_result = self.env.is_success()
                     is_task_success = success_result[0]["task"] if isinstance(success_result, list) and len(success_result) > 0 else False
+                    
                     if not is_task_success:
                         if self.save_failure:
                             print("Saving failure trajectory.")
