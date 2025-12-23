@@ -30,7 +30,7 @@ if __name__ == "__main__":
         demo_source="scripted",
         randomness=args.randomness,
         controller="diffik",
-        suffix="reverse" if args.reverse else "",
+        suffix="reverse" if args.reverse else "forward",
     )
 
     print(f"Saving data to directory: {data_path}")
