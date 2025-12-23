@@ -308,7 +308,13 @@ def calculate_success_rate(
         )
 
         # Calculate the success rate
-        success = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+        if env.__class__.__name__ == "FurnitureRLReverseSimEnv":
+            #success = np.array([env.is_success()[0]['task']])
+            success = np.array([s['task'] for s in env.is_success()])
+        elif env.__class__.__name__ == "FurnitureRLSimEnv":
+            success = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+        else:
+            raise ValueError(f"Unsupported environment: {env.__class__.__name__}")
         n_success += success.sum().item()
 
         # Save the results from the rollout
@@ -480,12 +486,13 @@ def do_rollout_evaluation(
     if save_rollouts_to_file:
         rollout_save_dir = trajectory_save_dir(
             controller=env.ctrl_mode,
-            environment="sim",
+            domain="sim",
             task=config.task,
             demo_source="rollout",
             randomness=config.randomness,
             # Don't create here because we have to do it when we save anyway
             create=False,
+            suffix=config.data.suffix,
         )
 
     actor.set_task(task2idx[config.task])

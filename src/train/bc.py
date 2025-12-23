@@ -7,6 +7,11 @@ from typing import Optional, Union
 
 import hydra
 import numpy as np
+# Import isaacgym before torch (required by Isaac Gym)
+try:
+    import isaacgym  # noqa: F401
+except ImportError:
+    pass  # Will be handled later if actually needed
 import torch
 import wandb
 from diffusers.optimization import get_scheduler
@@ -26,7 +31,7 @@ from src.dataset.dataloader import FixedStepsDataloader
 from src.dataset.dataset import ImageDataset, StateDataset
 from src.eval.eval_utils import get_model_from_api_or_cached
 from src.eval.rollout import do_rollout_evaluation
-from src.gym import get_rl_env
+from src.gym import get_rl_env, get_rl_reverse_env
 from src.models.ema import SwitchEMA
 
 # Import the wandb Run type for type hinting
@@ -66,13 +71,13 @@ def set_dryrun_params(cfg: DictConfig):
     if cfg.dryrun:
         OmegaConf.set_struct(cfg, False)
         cfg.training.steps_per_epoch = 10 if cfg.training.steps_per_epoch != -1 else -1
-        cfg.data.data_subset = 5
+        cfg.data.data_subset = 50
         cfg.data.dataloader_workers = 0
         cfg.training.sample_every = 1
         cfg.training.eval_every = 1
 
         if cfg.rollout.rollouts:
-            cfg.rollout.every = 1
+            cfg.rollout.every = 2
             # cfg.rollout.num_rollouts = 1
             cfg.rollout.loss_threshold = float("inf")
             # cfg.rollout.max_steps = 10
@@ -540,20 +545,34 @@ def main(cfg: DictConfig):
             ):
                 # Do not load the environment until we successfuly made it this far
                 if env is None:
-                    env = get_rl_env(
-                        cfg.training.gpu_id,
-                        task=cfg.rollout.task,
-                        num_envs=cfg.rollout.num_envs,
-                        randomness=cfg.rollout.randomness,
-                        observation_space=cfg.observation_type,
-                        resize_img=False,
-                        act_rot_repr=cfg.control.act_rot_repr,
-                        action_type=cfg.control.control_mode,
-                        parts_poses_in_robot_frame=cfg.rollout.parts_poses_in_robot_frame,
-                        headless=True,
-                        verbose=True,
-                    )
-
+                    if cfg.reverse:
+                        env = get_rl_reverse_env(
+                            cfg.training.gpu_id,
+                            task=cfg.rollout.task,
+                            num_envs=cfg.rollout.num_envs,
+                            randomness=cfg.rollout.randomness,
+                            observation_space=cfg.observation_type,
+                            resize_img=False,
+                            act_rot_repr=cfg.control.act_rot_repr,
+                            action_type=cfg.control.control_mode,
+                            parts_poses_in_robot_frame=cfg.rollout.parts_poses_in_robot_frame,
+                            headless=not cfg.visualize,
+                            verbose=True,
+                        )
+                    else:
+                        env = get_rl_env(
+                            cfg.training.gpu_id,
+                            task=cfg.rollout.task,
+                            num_envs=cfg.rollout.num_envs,
+                            randomness=cfg.rollout.randomness,
+                            observation_space=cfg.observation_type,
+                            resize_img=False,
+                            act_rot_repr=cfg.control.act_rot_repr,
+                            action_type=cfg.control.control_mode,
+                            parts_poses_in_robot_frame=cfg.rollout.parts_poses_in_robot_frame,
+                            headless=not cfg.visualize,
+                            verbose=True,
+                        )
                 best_success_rate = do_rollout_evaluation(
                     config=cfg,
                     env=env,
