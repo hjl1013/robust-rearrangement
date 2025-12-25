@@ -31,7 +31,7 @@ import wandb
 from wandb.apis.public.runs import Run
 from wandb.errors.util import CommError
 
-from src.gym import get_rl_env, get_reverse_rl_env
+from src.gym import get_rl_env, get_rl_reverse_env
 import gymnasium as gym
 
 # Register the eval resolver for omegaconf
@@ -174,7 +174,51 @@ def main(cfg: DictConfig):
     gpu_id = cfg.gpu_id
     device = torch.device(f"cuda:{gpu_id}")
 
-    env: gym.Env = get_reverse_rl_env(
+    if cfg.env.dense_reward:
+        # load latent model
+        device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
+        checkpoint_path = Path(cfg.env.latent_model)
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        
+        # Get config from checkpoint
+        if "config" in checkpoint:
+            actor_cfg = OmegaConf.create(checkpoint["config"])
+        else:
+            raise ValueError("Config not found in checkpoint. Please provide a checkpoint with config.")
+
+        # Temporary fix for residual missing field
+        if "base_policy" in actor_cfg:
+            print("Applying residual field hotfix")
+            actor_cfg.action_dim = actor_cfg.base_policy.action_dim
+
+        # Temporary fix for dagger missing field
+        if "student_policy" in actor_cfg:
+            print("Applying dagger field hotfix")
+            actor_cfg.action_dim = actor_cfg.student_policy.action_dim
+
+        # Temporary fix for critic missing field in actor config
+        if "critic" in actor_cfg:
+            print("Applying critic field hotfix")
+            actor_cfg.actor.critic = actor_cfg.critic
+            actor_cfg.actor.init_logstd = actor_cfg.init_logstd
+            actor_cfg.discount = actor_cfg.base_policy.discount
+        
+        # Create actor and load weights
+        from src.behavior import get_actor
+        from src.behavior.base import Actor
+        actor: Actor = get_actor(cfg=actor_cfg, device=device)
+        
+        if "model_state_dict" in checkpoint:
+            actor.load_state_dict(checkpoint["model_state_dict"])
+        else:
+            actor.load_state_dict(checkpoint)
+        
+        actor.eval()
+        actor.to(device)
+    else:
+        actor = None
+
+    env: gym.Env = get_rl_reverse_env(
         gpu_id=gpu_id,
         act_rot_repr=cfg.control.act_rot_repr,
         action_type=cfg.control.control_mode,
@@ -183,13 +227,14 @@ def main(cfg: DictConfig):
         ctrl_mode=cfg.control.controller,
         obs_keys=DEFAULT_STATE_OBS,
         task=cfg.env.task,
-        compute_device_id=gpu_id,
-        graphics_device_id=gpu_id,
         headless=cfg.headless,
         num_envs=cfg.num_envs,
         observation_space="state",
         randomness=cfg.env.randomness,
         max_env_steps=100_000_000,
+        dense_reward=cfg.env.dense_reward,
+        dense_reward_threshold=0.1,
+        latent_model=actor,
     )
 
     n_parts_to_assemble = env.n_parts_assemble
