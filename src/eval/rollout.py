@@ -188,8 +188,10 @@ def rollout(
         # action_pred = torch.tensor(actions[step_idx], device="cuda").unsqueeze(0)
         # action_pred = actor.normalizer(action_pred, "action", forward=False)
 
+        import time
+        start_time = time.time()
         obs, reward, done, _ = env.step(action_pred, sample_perturbations=False)
-
+        print(f"step time: {time.time() - start_time}")
         video_obs = deepcopy(obs)
 
         # Resize the images in the observation if they exist
