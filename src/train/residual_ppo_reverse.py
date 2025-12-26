@@ -432,7 +432,13 @@ def main(cfg: DictConfig):
         # Calculate the success rate
         # Find the rewards that are not zero
         # Env is successful if it received a reward more than or equal to n_parts_to_assemble
-        env_success = (rewards > 0).sum(dim=0) >= n_parts_to_assemble
+        # Calculate the success rate
+        if env.__class__.__name__ == "FurnitureRLReverseSimEnv":
+            env_success = np.array([s['task'] for s in env.is_success()])
+        elif env.__class__.__name__ == "FurnitureRLSimEnv":
+            env_success = (rewards > 0).sum(dim=0) >= n_parts_to_assemble
+        else:
+            raise ValueError(f"Unsupported environment: {env.__class__.__name__}")
         success_rate = env_success.float().mean().item()
 
         if success_rate > 0:
