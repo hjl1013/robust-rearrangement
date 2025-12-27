@@ -221,7 +221,15 @@ def rollout(
         if pbar is not None:
             pbar.set_postfix(step=step_idx)
             # n_success = (rewards.sum(dim=1) == n_parts_assemble).sum().item()
-            n_success = dones_history.any(dim=1).sum().item() # (Modified this to use dones instead of rewards)
+            # Calculate the success rate
+            if env.__class__.__name__ == "FurnitureRLReverseSimEnv":
+                #success = np.array([env.is_success()[0]['task']])
+                success = np.array([s['task'] for s in env.is_success()])
+            elif env.__class__.__name__ == "FurnitureRLSimEnv":
+                success = rewards.sum(dim=1) == n_parts_assemble
+            else:
+                raise ValueError(f"Unsupported environment: {env.__class__.__name__}")
+            n_success = success.sum().item()
             pbar.pbar_desc(n_success)
             pbar.update()
 

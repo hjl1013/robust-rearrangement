@@ -237,8 +237,6 @@ def main(cfg: DictConfig):
         latent_model=actor,
     )
 
-    n_parts_to_assemble = env.n_parts_assemble
-
     if cfg.base_policy.actor.name == "diffusion":
         agent = ResidualDiffusionPolicy(device, base_cfg)
     elif cfg.base_policy.actor.name == "mlp":
@@ -429,39 +427,41 @@ def main(cfg: DictConfig):
                     f"env_step={env_step}, global_step={global_step}, mean_reward={rewards[:step+1].sum(dim=0).mean().item()} fps={env_step * cfg.num_envs / (time.time() - iteration_start_time):.2f}"
                 )
 
-        # Calculate the success rate
-        # Find the rewards that are not zero
-        # Env is successful if it received a reward more than or equal to n_parts_to_assemble
-        # Calculate the success rate
-        if env.__class__.__name__ == "FurnitureRLReverseSimEnv":
-            env_success = np.array([s['task'] for s in env.is_success()])
-        elif env.__class__.__name__ == "FurnitureRLSimEnv":
-            env_success = (rewards > 0).sum(dim=0) >= n_parts_to_assemble
-        else:
-            raise ValueError(f"Unsupported environment: {env.__class__.__name__}")
+        # Calculate the success rate using is_success() which works for both forward and reverse
+        env_success = torch.tensor([s['task'] for s in env.is_success()], dtype=torch.bool, device=device)
         success_rate = env_success.float().mean().item()
 
         if success_rate > 0:
-            # Calculate the share of timesteps that come from successful trajectories that account for the success rate and the varying number of timesteps per trajectory
-            # Count total timesteps in successful trajectories
-            timesteps_in_success = rewards[:, env_success]
-
-            # Find index of last reward in each trajectory
-            # This has all timesteps including and after episode is done
-            success_dones = timesteps_in_success.cumsum(dim=0) >= n_parts_to_assemble
-            last_reward_idx = success_dones.int().argmax(dim=0)
-
+            # Calculate episode lengths and statistics for successful trajectories
+            # Find when each successful environment's episode ended (first done flag)
+            # dones shape: (steps_per_iteration, num_envs)
+            
+            # Get only successful environments' done flags
+            dones_success = dones[:, env_success]  # (steps_per_iteration, num_successful)
+            
+            # Find the first timestep where done=True for each successful environment
+            # If never done within this iteration, use the last timestep
+            done_timesteps = dones_success.int().argmax(dim=0)  # (num_successful,)
+            
+            # Check if actually became done (vs. just argmax returning 0 when no True found)
+            actually_done = dones_success.any(dim=0)  # (num_successful,)
+            
+            # If not done in this iteration, use full iteration length
+            episode_lengths = torch.where(
+                actually_done,
+                done_timesteps + 1,  # +1 because we want length, not index
+                torch.tensor(steps_per_iteration, device=device, dtype=torch.long)
+            )
+            
             # Calculate the total number of timesteps in successful trajectories
-            total_timesteps_in_success = (last_reward_idx + 1).sum().item()
+            total_timesteps_in_success = episode_lengths.sum().item()
 
             # Calculate the share of successful timesteps
-            success_timesteps_share = total_timesteps_in_success / rewards.numel()
+            success_timesteps_share = total_timesteps_in_success / (steps_per_iteration * cfg.num_envs)
 
-            # Mean successful episode length
-            mean_success_episode_length = (
-                total_timesteps_in_success / env_success.sum().item()
-            )
-            max_success_episode_length = last_reward_idx.max().item()
+            # Mean and max successful episode length
+            mean_success_episode_length = episode_lengths.float().mean().item()
+            max_success_episode_length = episode_lengths.max().item()
         else:
             success_timesteps_share = 0
             mean_success_episode_length = 0
