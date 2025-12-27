@@ -156,7 +156,7 @@ def main(cfg: DictConfig):
             raise ValueError("No base policy provided")
 
         merge_base_bc_config_with_root_config(cfg, base_cfg)
-        cfg.actor_name = f"residual_{cfg.base_policy.actor.name}"
+        cfg.actor_name = f"reverse_residual_{cfg.base_policy.actor.name}"
 
         if cfg.seed is None:
             cfg.seed = random.randint(0, 2**32 - 1)
