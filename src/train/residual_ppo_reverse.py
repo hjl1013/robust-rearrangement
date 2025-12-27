@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from tqdm import trange
+from tqdm import trange, tqdm
 
 import wandb
 from wandb.apis.public.runs import Run
@@ -387,7 +387,7 @@ def main(cfg: DictConfig):
 
         print(f"Eval mode: {eval_mode}")
 
-        for step in range(0, steps_per_iteration):
+        for step in tqdm(range(0, steps_per_iteration), desc="Rollout"):
             if not eval_mode:
                 # Only count environment steps during training
                 global_step += cfg.num_envs
@@ -422,10 +422,10 @@ def main(cfg: DictConfig):
             rewards[step] = reward.view(-1).cpu()
             next_done = next_done.view(-1).cpu()
 
-            if step > 0 and (env_step := step * 1) % 100 == 0:
-                print(
-                    f"env_step={env_step}, global_step={global_step}, mean_reward={rewards[:step+1].sum(dim=0).mean().item()} fps={env_step * cfg.num_envs / (time.time() - iteration_start_time):.2f}"
-                )
+            # if step > 0 and (env_step := step * 1) % 100 == 0:
+            #     print(
+            #         f"env_step={env_step}, global_step={global_step}, mean_reward={rewards[:step+1].sum(dim=0).mean().item()} fps={env_step * cfg.num_envs / (time.time() - iteration_start_time):.2f}"
+            #     )
 
         # Calculate the success rate using is_success() which works for both forward and reverse
         env_success = torch.tensor([s['task'] for s in env.is_success()], dtype=torch.bool, device=device)
