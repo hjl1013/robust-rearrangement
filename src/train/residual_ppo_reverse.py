@@ -428,7 +428,7 @@ def main(cfg: DictConfig):
             #     )
 
         # Calculate the success rate using is_success() which works for both forward and reverse
-        env_success = torch.tensor([s['task'] for s in env.is_success()], dtype=torch.bool, device=device)
+        env_success = torch.tensor([s['task'] for s in env.env.is_success()], dtype=torch.bool, device=device)
         success_rate = env_success.float().mean().item()
 
         if success_rate > 0:
