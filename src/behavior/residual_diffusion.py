@@ -56,10 +56,10 @@ class ResidualDiffusionPolicy(DiffusionPolicy):
             cfg.actor.residual_policy,
             obs_shape=(self.timestep_obs_dim,),
             action_shape=(self.action_dim,),
-        )
+        ).to(self.device)
 
     def load_base_state_dict(self, path: str):
-        base_state_dict = torch.load(path)
+        base_state_dict = torch.load(path, map_location=self.device)
         if "model_state_dict" in base_state_dict:
             base_state_dict = base_state_dict["model_state_dict"]
 

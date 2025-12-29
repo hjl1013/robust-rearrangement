@@ -50,7 +50,8 @@ def calculate_advantage(
     gae_lambda: float,
 ):
     advantages = torch.zeros_like(rewards)
-    lastgaelam = 0
+    # Initialize lastgaelam as a tensor on the same device as rewards
+    lastgaelam = torch.zeros_like(rewards[0])
     for t in reversed(range(steps_per_iteration)):
         if t == steps_per_iteration - 1:
             nextnonterminal = 1.0 - next_done.to(torch.float)
