@@ -466,7 +466,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="./latent_visualizations",
+        default="reverse/poc_latent/visualization_compare_latent_with_demo",
         help="Output directory for visualizations",
     )
     parser.add_argument(
