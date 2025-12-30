@@ -175,9 +175,11 @@ def main():
         help="FPS for output video",
     )
     parser.add_argument(
-        "--dense-reward",
-        action="store_true",
-        help="Use dense reward.",
+        "--reward-type",
+        type=str,
+        default="sparse-variant1",
+        help="Reward type to use.",
+        choices=["sparse-variant1", "sparse-variant2", "sparse-variant3", "dense-variant1", "dense-variant2"],
     )
     parser.add_argument(
         "--latent-model",
@@ -187,7 +189,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.dense_reward:
+    if args.reward_type == "dense-variant1" or args.reward_type == "dense-variant2":
         # load latent model
         device = torch.device(f"cuda:{args.compute_device_id}" if torch.cuda.is_available() else "cpu")
         checkpoint_path = Path(args.latent_model)
@@ -251,7 +253,7 @@ def main():
         act_rot_repr=args.act_rot_repr,
         compute_device_id=args.compute_device_id,
         graphics_device_id=args.graphics_device_id,
-        dense_reward=args.dense_reward,
+        reward_type=args.reward_type,
         latent_model=actor,
     )
 
@@ -287,6 +289,7 @@ def main():
     ac_rewards = np.array(ac_rewards)
 
     # Create output directory
+    args.output_dir = args.output_dir + f"_{args.reward_type}"
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     

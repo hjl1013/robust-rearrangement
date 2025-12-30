@@ -175,7 +175,7 @@ def main(cfg: DictConfig):
     gpu_id = cfg.gpu_id
     device = torch.device(f"cuda:{gpu_id}")
 
-    if cfg.env.dense_reward:
+    if cfg.env.reward_type == "dense-variant1" or cfg.env.reward_type == "dense-variant2":
         # load latent model
         device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
         checkpoint_path = Path(cfg.env.latent_model)
@@ -233,8 +233,7 @@ def main(cfg: DictConfig):
         observation_space="state",
         randomness=cfg.env.randomness,
         max_env_steps=100_000_000,
-        dense_reward=cfg.env.dense_reward,
-        dense_reward_threshold=0.1,
+        reward_type=cfg.env.reward_type,
         latent_model=actor,
     )
 
@@ -429,7 +428,7 @@ def main(cfg: DictConfig):
             #     )
 
         # Calculate the success rate using is_success() which works for both forward and reverse
-        env_success = torch.tensor([s['task'] for s in env.env.is_success()], dtype=torch.bool, device=device)
+        env_success = torch.tensor([s['task'] for s in env.env.is_success()], dtype=torch.bool)
         success_rate = env_success.float().mean().item()
 
         if success_rate > 0:
@@ -451,7 +450,7 @@ def main(cfg: DictConfig):
             episode_lengths = torch.where(
                 actually_done,
                 done_timesteps + 1,  # +1 because we want length, not index
-                torch.tensor(steps_per_iteration, device=device, dtype=torch.long)
+                torch.tensor(steps_per_iteration, dtype=torch.long)
             )
             
             # Calculate the total number of timesteps in successful trajectories
