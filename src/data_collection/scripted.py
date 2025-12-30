@@ -15,6 +15,7 @@ if __name__ == "__main__":
     parser.add_argument("--headless", action="store_true")
 
     parser.add_argument("--reverse", action="store_true")
+    parser.add_argument("--suffix", type=str, default="")
     args = parser.parse_args()
 
     # TODO: Consider what we do with images of full size and if that's needed
@@ -30,7 +31,7 @@ if __name__ == "__main__":
         demo_source="scripted",
         randomness=args.randomness,
         controller="diffik",
-        suffix="reverse" if args.reverse else "forward",
+        suffix="reverse"+args.suffix if args.reverse else "forward"+args.suffix,
     )
 
     print(f"Saving data to directory: {data_path}")
