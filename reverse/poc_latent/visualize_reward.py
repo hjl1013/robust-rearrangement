@@ -261,7 +261,11 @@ def main():
 
     def action_tensor(ac):
         if isinstance(ac, (list, np.ndarray)):
-            return torch.tensor(ac).float().to(env.device)
+            ac = torch.tensor(ac).float().to(env.device)
+            # Add dimension if shape is 1D, then tile to num_envs
+            if len(ac.shape) == 1:
+                ac = ac[None]
+            return ac.tile(args.num_envs, 1)
 
         ac = ac.clone()
         if len(ac.shape) == 1:
