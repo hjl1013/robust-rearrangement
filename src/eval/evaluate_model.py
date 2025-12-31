@@ -25,10 +25,11 @@ api = Api()
 
 
 class LocalCheckpointWrapper:
-    def __init__(self, checkpoint_path: str):
+    def __init__(self, checkpoint_path: str, gpu: int):
         self.checkpoint_path = Path(checkpoint_path)
+        self.device = torch.device(f"cuda:{gpu}" if torch.cuda.is_available() else "cpu")
 
-        self.checkpoint = torch.load(self.checkpoint_path)
+        self.checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
 
         self.config: DictConfig = OmegaConf.create(self.checkpoint["config"])
         self.name = self.checkpoint_path.stem
@@ -110,7 +111,7 @@ def get_runs(args: argparse.Namespace) -> List[Run]:
     # Clear the cache to make sure we get the latest runs
     if args.wt_path:
 
-        run = LocalCheckpointWrapper(args.wt_path)
+        run = LocalCheckpointWrapper(args.wt_path, gpu=args.gpu)
         runs = [run]
 
     else:
