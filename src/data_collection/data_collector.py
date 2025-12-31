@@ -72,49 +72,6 @@ class DataCollector:
             reverse (bool): Whether to collect reverse data.
         """
         if is_sim:
-            # start_state = None
-            # if reverse:
-            #     import os
-            #     import random
-            #     import lzma
-            #     self.forward_rollout_dir = os.environ.get("DATA_DIR_FORWARD_ROLLOUT", None)
-            #     if self.forward_rollout_dir is None:
-            #         raise ValueError(
-            #             "DATA_DIR_FORWARD_ROLLOUT environment variable must be set to use FurnitureRLReverseSimEnv"
-            #         )
-            #     self.forward_rollout_dir = Path(self.forward_rollout_dir)
-            #     if not self.forward_rollout_dir.exists():
-            #         raise ValueError(f"Forward rollout directory does not exist: {self.forward_rollout_dir}")
-
-            #     pickle_files = (
-            #         list(self.forward_rollout_dir.rglob("*.pkl")) +
-            #         list(self.forward_rollout_dir.rglob("*.pkl.xz")) +
-            #         list(self.forward_rollout_dir.rglob("*.pkl.gz"))
-            #     )
-            #     selected_file = random.choice(pickle_files)
-            #     print(selected_file)
-            #     with open(selected_file, "rb") as f:
-            #         data = pickle.load(f)
-            #         start_state = data["observations"][-1]
-            # self.env = gym.make(
-            #     "FurnitureSimFull-v0",
-            #     furniture=furniture,
-            #     max_env_steps=sim_config["scripted_timeout"][furniture]
-            #     if scripted
-            #     else 3000,
-            #     headless=headless,
-            #     num_envs=1,  # Only support 1 for now.
-            #     manual_done=False if scripted else True,
-            #     resize_img=resize_sim_img,
-            #     np_step_out=False,  # Always output Tensor in this setting. Will change to numpy in this code.
-            #     channel_first=False,
-            #     randomness=randomness,
-            #     compute_device_id=compute_device_id,
-            #     graphics_device_id=graphics_device_id,
-            #     ctrl_mode=ctrl_mode,
-            #     reverse=reverse,
-            #     start_state=start_state
-            # )
             from src.gym import get_rl_env, get_rl_reverse_env
             if reverse:
                 self.env = get_rl_reverse_env(
@@ -123,7 +80,7 @@ class DataCollector:
                     num_envs=1,
                     randomness="low",
                     observation_space="image",
-                    max_env_steps=500,
+                    max_env_steps=1000,
                     resize_img=False,
                     act_rot_repr="quat",
                     action_type="delta",
@@ -138,7 +95,7 @@ class DataCollector:
                     num_envs=1,
                     randomness="low",
                     observation_space="image",
-                    max_env_steps=500,
+                    max_env_steps=1000,
                     resize_img=False,
                     act_rot_repr="quat",
                     action_type="delta",
