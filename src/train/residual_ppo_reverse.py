@@ -175,7 +175,7 @@ def main(cfg: DictConfig):
     gpu_id = cfg.gpu_id
     device = torch.device(f"cuda:{gpu_id}")
 
-    if cfg.env.reward_type == "dense-variant1" or cfg.env.reward_type == "dense-variant2":
+    if cfg.env.reward_type == "dense-variant1" or cfg.env.reward_type == "dense-variant2" or cfg.env.reward_type == "dense-variant4":
         # load latent model
         device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
         checkpoint_path = Path(cfg.env.latent_model)
@@ -344,7 +344,7 @@ def main(cfg: DictConfig):
         entity=cfg.wandb.get("entity", None),
         config=OmegaConf.to_container(cfg, resolve=True),
         name=run_name,
-        save_code=True,
+        save_code=False,
         mode=cfg.wandb.mode if not cfg.debug else "disabled",
     )
 
@@ -496,7 +496,7 @@ def main(cfg: DictConfig):
                     model_path,
                 )
 
-                wandb.save(model_path)
+                # wandb.save(model_path)
                 print(f"Evaluation success rate improved. Model saved to {model_path}")
 
             wandb.log(
@@ -710,7 +710,7 @@ def main(cfg: DictConfig):
                 model_path,
             )
 
-            wandb.save(model_path)
+            # wandb.save(model_path)
             print(f"Model saved to {model_path}")
 
         # Print some stats at the end of the iteration
