@@ -27,7 +27,7 @@ def get_actor(cfg: DictConfig, device) -> Actor:
             device=device,
         )
 
-    elif actor_name == "residual_diffusion":
+    elif actor_name == "residual_diffusion" or actor_name == "reverse_residual_diffusion":
         from src.behavior.residual_diffusion import ResidualDiffusionPolicy
 
         return ResidualDiffusionPolicy(
