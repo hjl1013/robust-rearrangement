@@ -12,7 +12,7 @@ reset_on_success: true
 sample_perturbations: false
 eval_interval: 5
 eval_first: true
-checkpoint_interval: 10
+checkpoint_interval: -1
 truncation_as_done: true
 base_policy:
   wandb_id: null  # If starting with a base policy from a WandB run (typical)

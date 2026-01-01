@@ -89,9 +89,120 @@ def create_reward_video(
     print(f"Saved reward video to {output_path}")
 
 
+def process_pickle_file(pickle_path: Path, output_dir: Path, args, env, action_tensor):
+    """Process a single pickle file and generate visualizations.
+    
+    Args:
+        pickle_path: Path to the pickle file to process
+        output_dir: Directory where outputs should be saved
+        args: Parsed command line arguments
+        env: Gym environment instance
+        action_tensor: Function to convert actions to tensors
+    """
+    # Replay the trajectory.
+    with open(pickle_path, "rb") as f:
+        data = pickle.load(f)
+
+    rewards = []
+    ac_rewards = []
+    ac_reward = 0
+    for obs, ac in tqdm(zip(data["observations"], data["actions"]), total=len(data["observations"]), desc=f"Calculating rewards for {pickle_path.name}"):
+        env.reset_to([obs])
+        ac = action_tensor(ac)
+        ob, rew, done, _ = env.step(ac)
+        ac_reward += rew.cpu().item()
+        rewards.append(rew.cpu().item())
+        ac_rewards.append(ac_reward)
+
+    env.save_knn_viz_video(0)
+
+    rewards = np.array(rewards)
+    ac_rewards = np.array(ac_rewards)
+
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Extract video frames from observations
+    print(f"Preparing rollout video for {pickle_path.name}...")
+    rollout_video = []
+    has_images_in_rollout = False
+    
+    for obs in data["observations"]:
+        # Check if images exist in observation
+        if "color_image1" in obs and "color_image2" in obs:
+            has_images_in_rollout = True
+            img1 = obs["color_image1"]
+            img2 = obs["color_image2"]
+            
+            # Ensure images are uint8 and have correct shape
+            if isinstance(img1, torch.Tensor):
+                img1 = img1.cpu().numpy()
+            if isinstance(img2, torch.Tensor):
+                img2 = img2.cpu().numpy()
+            
+            # Handle different image formats
+            if len(img1.shape) == 4:  # (B, H, W, C) or (B, C, H, W)
+                img1 = img1[0]
+                img2 = img2[0]
+            if len(img1.shape) == 3 and img1.shape[0] == 3:  # (C, H, W)
+                img1 = img1.transpose(1, 2, 0)
+                img2 = img2.transpose(1, 2, 0)
+            
+            # Ensure uint8
+            if img1.dtype != np.uint8:
+                img1 = (img1 * 255).astype(np.uint8) if img1.max() <= 1.0 else img1.astype(np.uint8)
+                img2 = (img2 * 255).astype(np.uint8) if img2.max() <= 1.0 else img2.astype(np.uint8)
+            
+            # Resize if needed to match
+            if img1.shape[:2] != img2.shape[:2]:
+                # Resize to same height
+                h = min(img1.shape[0], img2.shape[0])
+                img1 = img1[:h]
+                img2 = img2[:h]
+            
+            # Concatenate side by side
+            combined = np.concatenate([img1, img2], axis=1)
+            rollout_video.append(combined)
+        else:
+            # For state observations or when images don't exist, create a dummy image with text
+            dummy_img = np.zeros((240, 640, 3), dtype=np.uint8)
+            # Add text indicating no images
+            if cv2 is not None:
+                cv2.putText(dummy_img, "No Images Available", (50, 120), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(dummy_img, f"State Observation Only", (50, 160), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+            rollout_video.append(dummy_img)
+    
+    rollout_video = np.array(rollout_video)
+    print(f"Rollout video shape: {rollout_video.shape}")
+    print(f"Has images in rollout: {has_images_in_rollout}")
+    
+    # Create reward video
+    print(f"Creating reward video for {pickle_path.name}...")
+    reward_video_path = output_dir / "reward_video.mp4"
+    create_reward_video(rollout_video, rewards, ac_rewards, reward_video_path, fps=args.fps)
+    
+    # Save static reward plot
+    print(f"Creating static reward plot for {pickle_path.name}...")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(rewards, 'b-', linewidth=2)
+    ax.set_xlabel('Timestep', fontsize=12)
+    ax.set_ylabel('Reward', fontsize=12)
+    ax.set_title('Reward Over Time', fontsize=14)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    reward_plot_path = output_dir / "reward_plot.png"
+    plt.savefig(reward_plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved reward plot to {reward_plot_path}")
+    
+    print(f"\nDone! Visualizations saved to: {output_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--furniture", default="square_table")
+    parser.add_argument("--furniture", default="one_leg")
     parser.add_argument(
         "--file-path", help="Demo path to replay (data directory or pickle)"
     )
@@ -138,6 +249,9 @@ def main():
     parser.add_argument(
         "--replay-path", type=str, help="Path to the saved data to replay action."
     )
+    parser.add_argument(
+        "--replay-dir", type=str, help="Directory containing pickle files to process."
+    )
 
     parser.add_argument(
         "--act-rot-repr",
@@ -179,7 +293,7 @@ def main():
         type=str,
         default="sparse-variant1",
         help="Reward type to use.",
-        choices=["sparse-variant1", "sparse-variant2", "sparse-variant3", "dense-variant1", "dense-variant2"],
+        choices=["sparse-variant1", "sparse-variant2", "sparse-variant3", "dense-variant1", "dense-variant2", "dense-variant3", "dense-variant4"],
     )
     parser.add_argument(
         "--latent-model",
@@ -187,9 +301,20 @@ def main():
         default=None,
         help="Path to latent model to use for dense reward.",
     )
+    parser.add_argument(
+        "--vis-knn",
+        action="store_true",
+        help="Visualize k-nearest neighbors.",
+    )
     args = parser.parse_args()
 
-    if args.reward_type == "dense-variant1" or args.reward_type == "dense-variant2":
+    # Validate that --replay-dir and --replay-path are mutually exclusive
+    if args.replay_dir and args.replay_path:
+        parser.error("--replay-dir and --replay-path cannot be used together. Please specify only one.")
+    if not args.replay_dir and not args.replay_path:
+        parser.error("Either --replay-dir or --replay-path must be provided.")
+
+    if args.reward_type == "dense-variant1" or args.reward_type == "dense-variant2" or args.reward_type == "dense-variant4":
         # load latent model
         device = torch.device(f"cuda:{args.compute_device_id}" if torch.cuda.is_available() else "cpu")
         checkpoint_path = Path(args.latent_model)
@@ -255,6 +380,8 @@ def main():
         graphics_device_id=args.graphics_device_id,
         reward_type=args.reward_type,
         latent_model=actor,
+        visualize_knn=args.vis_knn,
+        knn_viz_output_dir=args.output_dir + f"_{args.reward_type}",
     )
 
     # Initialize FurnitureSim.
@@ -263,112 +390,67 @@ def main():
 
     def action_tensor(ac):
         if isinstance(ac, (list, np.ndarray)):
-            return torch.tensor(ac).float().to(env.device)
+            ac = torch.tensor(ac).float().to(env.device)
+            # Add dimension if shape is 1D, then tile to num_envs
+            if len(ac.shape) == 1:
+                ac = ac[None]
+            return ac.tile(args.num_envs, 1)
 
         ac = ac.clone()
         if len(ac.shape) == 1:
             ac = ac[None]
         return ac.tile(args.num_envs, 1).float().to(env.device)
 
-    # Replay the trajectory.
-    with open(args.replay_path, "rb") as f:
-        data = pickle.load(f)
+    # Base output directory with reward type suffix
+    base_output_dir = Path(args.output_dir + f"_{args.reward_type}")
 
-    rewards = []
-    ac_rewards = []
-    ac_reward = 0
-    for obs, ac in tqdm(zip(data["observations"], data["actions"]), total=len(data["observations"]), desc="Calculating rewards"):
-        env.reset_to([obs])
-        ac = action_tensor(ac)
-        ob, rew, done, _ = env.step(ac)
-        ac_reward += rew.cpu().item()
-        rewards.append(rew.cpu().item())
-        ac_rewards.append(ac_reward)
-
-    rewards = np.array(rewards)
-    ac_rewards = np.array(ac_rewards)
-
-    # Create output directory
-    args.output_dir = args.output_dir + f"_{args.reward_type}"
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Extract video frames from observations
-    print("Preparing rollout video...")
-    rollout_video = []
-    has_images_in_rollout = False
-    
-    for obs in data["observations"]:
-        # Check if images exist in observation
-        if "color_image1" in obs and "color_image2" in obs:
-            has_images_in_rollout = True
-            img1 = obs["color_image1"]
-            img2 = obs["color_image2"]
-            
-            # Ensure images are uint8 and have correct shape
-            if isinstance(img1, torch.Tensor):
-                img1 = img1.cpu().numpy()
-            if isinstance(img2, torch.Tensor):
-                img2 = img2.cpu().numpy()
-            
-            # Handle different image formats
-            if len(img1.shape) == 4:  # (B, H, W, C) or (B, C, H, W)
-                img1 = img1[0]
-                img2 = img2[0]
-            if len(img1.shape) == 3 and img1.shape[0] == 3:  # (C, H, W)
-                img1 = img1.transpose(1, 2, 0)
-                img2 = img2.transpose(1, 2, 0)
-            
-            # Ensure uint8
-            if img1.dtype != np.uint8:
-                img1 = (img1 * 255).astype(np.uint8) if img1.max() <= 1.0 else img1.astype(np.uint8)
-                img2 = (img2 * 255).astype(np.uint8) if img2.max() <= 1.0 else img2.astype(np.uint8)
-            
-            # Resize if needed to match
-            if img1.shape[:2] != img2.shape[:2]:
-                # Resize to same height
-                h = min(img1.shape[0], img2.shape[0])
-                img1 = img1[:h]
-                img2 = img2[:h]
-            
-            # Concatenate side by side
-            combined = np.concatenate([img1, img2], axis=1)
-            rollout_video.append(combined)
-        else:
-            # For state observations or when images don't exist, create a dummy image with text
-            dummy_img = np.zeros((240, 640, 3), dtype=np.uint8)
-            # Add text indicating no images
-            if cv2 is not None:
-                cv2.putText(dummy_img, "No Images Available", (50, 120), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                cv2.putText(dummy_img, f"State Observation Only", (50, 160), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-            rollout_video.append(dummy_img)
-    
-    rollout_video = np.array(rollout_video)
-    print(f"Rollout video shape: {rollout_video.shape}")
-    print(f"Has images in rollout: {has_images_in_rollout}")
-    
-    # Create reward video
-    print("Creating reward video...")
-    reward_video_path = output_dir / "reward_video.mp4"
-    create_reward_video(rollout_video, rewards, ac_rewards, reward_video_path, fps=args.fps)
-    
-    # Save static reward plot
-    print("Creating static reward plot...")
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(rewards, 'b-', linewidth=2)
-    ax.set_xlabel('Timestep', fontsize=12)
-    ax.set_ylabel('Reward', fontsize=12)
-    ax.set_title('Reward Over Time', fontsize=14)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    reward_plot_path = output_dir / "reward_plot.png"
-    plt.savefig(reward_plot_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"Saved reward plot to {reward_plot_path}")
-    
-    print(f"\nDone! Visualizations saved to: {output_dir}")
+    # Process pickle files
+    if args.replay_dir:
+        # Process all pickle files in the directory
+        replay_dir = Path(args.replay_dir)
+        if not replay_dir.exists():
+            raise ValueError(f"Directory does not exist: {replay_dir}")
+        
+        # Find all .pkl files in the directory (top-level only, non-recursive)
+        pickle_files = list(replay_dir.glob("*.pkl"))
+        
+        if not pickle_files:
+            print(f"Warning: No .pkl files found in {replay_dir}")
+            return
+        
+        print(f"Found {len(pickle_files)} pickle file(s) to process")
+        
+        # Process each pickle file
+        for pickle_path in pickle_files:
+            try:
+                # Create output subdirectory based on pickle filename (without extension)
+                pickle_name = pickle_path.stem
+                output_dir = base_output_dir / pickle_name
+                
+                print(f"\n{'='*60}")
+                print(f"Processing: {pickle_path.name}")
+                print(f"Output directory: {output_dir}")
+                print(f"{'='*60}\n")
+                
+                process_pickle_file(pickle_path, output_dir, args, env, action_tensor)
+            except Exception as e:
+                print(f"Error processing {pickle_path.name}: {e}")
+                import traceback
+                traceback.print_exc()
+                print(f"Continuing with next file...\n")
+        
+        print(f"\n{'='*60}")
+        print(f"Batch processing complete! Processed {len(pickle_files)} file(s)")
+        print(f"Outputs saved to: {base_output_dir}")
+        print(f"{'='*60}")
+    else:
+        # Process single pickle file (existing behavior)
+        pickle_path = Path(args.replay_path)
+        if not pickle_path.exists():
+            raise ValueError(f"File does not exist: {pickle_path}")
+        
+        output_dir = base_output_dir
+        process_pickle_file(pickle_path, output_dir, args, env, action_tensor)
 
 
 if __name__ == "__main__":
