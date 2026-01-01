@@ -49,6 +49,7 @@ RolloutSaveValues = collections.namedtuple(
         "actions",
         "rewards",
         "parts_poses",
+        "n_success",
     ],
 )
 
@@ -179,6 +180,7 @@ def rollout(
     actor.normalizer = actor.normalizer.to(actor.device)
     actor.model = actor.model.to(actor.device)
 
+    n_success = 0
     while not done.all():
         # Convert from robot state dict to robot state tensor
         obs["robot_state"] = env.filter_and_concat_robot_state(obs["robot_state"])
@@ -229,7 +231,7 @@ def rollout(
                 success = rewards.sum(dim=1) == n_parts_assemble
             else:
                 raise ValueError(f"Unsupported environment: {env.__class__.__name__}")
-            n_success = success.sum().item()
+            n_success = max(n_success, success.sum().item())
             pbar.pbar_desc(n_success)
             pbar.update()
 
@@ -246,6 +248,7 @@ def rollout(
         torch.stack(actions, dim=1) if actions else [],
         rewards,
         torch.stack(parts_poses, dim=1) if parts_poses else [],
+        n_success,
     )
 
 
@@ -317,12 +320,14 @@ def calculate_success_rate(
         # Calculate the success rate
         if env.__class__.__name__ == "FurnitureRLReverseSimEnv":
             #success = np.array([env.is_success()[0]['task']])
-            success = np.array([s['task'] for s in env.is_success()])
+            # success = np.array([s['task'] for s in env.is_success()])
+            n_success += rollout_data.n_success
         elif env.__class__.__name__ == "FurnitureRLSimEnv":
             success = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+            n_success += success.sum().item()
         else:
             raise ValueError(f"Unsupported environment: {env.__class__.__name__}")
-        n_success += success.sum().item()
+        
 
         # Save the results from the rollout
         if save_rollouts:
