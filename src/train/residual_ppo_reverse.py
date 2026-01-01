@@ -162,7 +162,7 @@ def main(cfg: DictConfig):
         if cfg.seed is None:
             cfg.seed = random.randint(0, 2**32 - 1)
 
-        run_name = f"{int(time.time())}__{cfg.actor_name}_ppo__{cfg.seed}"
+        run_name = f"{int(time.time())}__{cfg.actor_name}_ppo_{cfg.env.reward_type}__{cfg.seed}"
 
     if "task" not in cfg.env:
         cfg.env.task = "one_leg"
