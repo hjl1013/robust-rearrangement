@@ -458,6 +458,12 @@ def main():
         help="Path to rollout pickle file",
     )
     parser.add_argument(
+        "--rollout-dir",
+        type=str,
+        required=True,
+        help="Path to rollout directory",
+    )
+    parser.add_argument(
         "--demo-dir",
         type=str,
         required=False,
