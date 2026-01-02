@@ -556,7 +556,7 @@ def main(cfg: DictConfig):
                             act_rot_repr=cfg.control.act_rot_repr,
                             action_type=cfg.control.control_mode,
                             parts_poses_in_robot_frame=cfg.rollout.parts_poses_in_robot_frame,
-                            headless=not cfg.visualize,
+                            headless=True,
                             verbose=True,
                         )
                     else:
@@ -570,7 +570,7 @@ def main(cfg: DictConfig):
                             act_rot_repr=cfg.control.act_rot_repr,
                             action_type=cfg.control.control_mode,
                             parts_poses_in_robot_frame=cfg.rollout.parts_poses_in_robot_frame,
-                            headless=not cfg.visualize,
+                            headless=True,
                             verbose=True,
                         )
                 best_success_rate = do_rollout_evaluation(
