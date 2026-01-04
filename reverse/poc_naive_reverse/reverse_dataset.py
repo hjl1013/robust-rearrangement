@@ -89,7 +89,7 @@ def extract_ee_pose_from_obs(obs):
     return ee_pos, ee_quat, gripper_width
 
 
-def compute_reversed_action(obs_t, obs_t_minus_1):
+def compute_reversed_action(obs_t, obs_t_plus_1):
     """
     Compute reversed delta action from two observations.
     
@@ -98,23 +98,23 @@ def compute_reversed_action(obs_t, obs_t_minus_1):
     
     Args:
         obs_t: Observation at timestep t (current state in reversed trajectory)
-        obs_t_minus_1: Observation at timestep t-1 (next state in reversed trajectory)
+        obs_t_plus_1: Observation at timestep t+1 (next state in reversed trajectory)
         
     Returns:
         numpy array of shape (8,) with reversed delta action [dx, dy, dz, dqx, dqy, dqz, dqw, gripper]
     """
     # Extract end-effector poses
     ee_pos_t, ee_quat_t, gripper_width_t = extract_ee_pose_from_obs(obs_t)
-    ee_pos_t_minus_1, ee_quat_t_minus_1, gripper_width_t_minus_1 = extract_ee_pose_from_obs(obs_t_minus_1)
+    ee_pos_t_plus_1, ee_quat_t_plus_1, gripper_width_t_plus_1 = extract_ee_pose_from_obs(obs_t_plus_1)
     
     # Convert to 4x4 matrices
     pose_mat_t = np.eye(4)
     pose_mat_t[:-1, -1] = ee_pos_t
     pose_mat_t[:-1, :-1] = st.Rotation.from_quat(ee_quat_t).as_matrix()
     
-    pose_mat_t_minus_1 = np.eye(4)
-    pose_mat_t_minus_1[:-1, -1] = ee_pos_t_minus_1
-    pose_mat_t_minus_1[:-1, :-1] = st.Rotation.from_quat(ee_quat_t_minus_1).as_matrix()
+    pose_mat_t_plus_1 = np.eye(4)
+    pose_mat_t_plus_1[:-1, -1] = ee_pos_t_plus_1
+    pose_mat_t_plus_1[:-1, :-1] = st.Rotation.from_quat(ee_quat_t_plus_1).as_matrix()
     
     # Determine gripper flag from gripper width
     # Use the gripper state from the "current" observation (obs_t) in reversed trajectory
@@ -124,7 +124,7 @@ def compute_reversed_action(obs_t, obs_t_minus_1):
     # Compute delta action: from obs_t to obs_t_minus_1
     reversed_action = to_isaac_dpose_from_abs(
         current_pose_mat=pose_mat_t,
-        goal_pose_mat=pose_mat_t_minus_1,
+        goal_pose_mat=pose_mat_t_plus_1,
         grasp_flag=grasp_flag,
         rm=True  # Right multiply as used in data_collector_sm.py
     )
@@ -170,15 +170,15 @@ def reverse_trajectory(data):
     # Reversed trajectory: obs_rev[0]=obs[N], obs_rev[1]=obs[N-1], ..., obs_rev[N]=obs[0]
     # For reversed_action[t]: move from obs_rev[t] to obs_rev[t-1]
     reversed_actions = []
-    for t in range(1, n_obs):  # Start from t=1 since we need t-1
+    for t in range(n_obs-1):  # Start from t=1 since we need t-1
         # In reversed trajectory:
         # obs_rev[t] is current state (which is obs[N-t] in original)
         # obs_rev[t-1] is previous state (which is obs[N-t+1] in original)
         # reversed_action[t] should move from obs_rev[t] to obs_rev[t-1]
         obs_t = reversed_observations[t]  # Current state at timestep t in reversed trajectory
-        obs_t_minus_1 = reversed_observations[t - 1]  # Previous state at timestep t-1 in reversed trajectory
+        obs_t_plus_1 = reversed_observations[t + 1]  # Previous state at timestep t-1 in reversed trajectory
         
-        reversed_action = compute_reversed_action(obs_t, obs_t_minus_1)
+        reversed_action = compute_reversed_action(obs_t, obs_t_plus_1)
         reversed_actions.append(reversed_action)
     
     # Reverse other keys as dummy data

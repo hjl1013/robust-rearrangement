@@ -10,6 +10,8 @@ import numpy as np
 import scipy.spatial.transform as st
 from pynput.keyboard import Key, Listener
 from multiprocessing.managers import SharedMemoryManager
+import matplotlib.pyplot as plt
+import matplotlib
 
 from furniture_bench.config import config
 from furniture_bench.envs.furniture_recovery_sim_env import FurnitureRecoverySimEnv
@@ -27,6 +29,9 @@ from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
 import torch
 
+# Use non-interactive backend for matplotlib to allow updates
+matplotlib.use('TkAgg')
+
 
 class RecoveryKeyboardInterface(KeyboardInterface):
     """Extended keyboard interface for recovery teleoperation with save/discard keys."""
@@ -35,10 +40,27 @@ class RecoveryKeyboardInterface(KeyboardInterface):
         super().__init__()
         self.save_pressed = False
         self.discard_pressed = False
+        self.save_failure_pressed = False  # 'f' key
+        # Navigation commands
+        self.ghost_prev_pressed = False  # 'u' key
+        self.ghost_next_pressed = False  # 'i' key
+        self.real_prev_pressed = False   # 'o' key
+        self.real_next_pressed = False   # 'p' key
+        # Graph display command
+        self.show_graph_pressed = False  # 'g' key
+        # Set indices command
+        self.set_indices_pressed = False  # 'y' key
+        # Undo command
+        self.undo_pressed = False  # 'b' key
     
     def on_press(self, k):
         try:
             k_char = k.char
+            
+            # Ignore digit keys (don't record rewards in recovery mode)
+            # if k_char.isdigit():
+            #     gym.logger.info(f"Digit key '{k_char}' pressed but ignored (no reward recording in recovery mode)")
+            #     return
             
             # Handle save and discard keys first
             if k_char == "s":
@@ -46,14 +68,54 @@ class RecoveryKeyboardInterface(KeyboardInterface):
                 self.save_pressed = True
                 self.key_enum = CollectEnum.SUCCESS  # Use SUCCESS for save
                 return
+            elif k_char == "f":
+                gym.logger.info("Save failure pressed")
+                self.save_failure_pressed = True
+                return
             elif k_char == "d":
                 gym.logger.info("Discard pressed")
                 self.discard_pressed = True
                 self.key_enum = CollectEnum.FAIL  # Use FAIL for discard
                 return
-            
+            # Handle graph display
+            elif k_char == "g":
+                gym.logger.info("Show graph pressed")
+                self.show_graph_pressed = True
+                return
+            # Handle set indices (override parent's 'y' for SUCCESS_RECORD)
+            elif k_char == "y":
+                gym.logger.info("Set indices pressed")
+                self.set_indices_pressed = True
+                return
+            # Handle undo
+            elif k_char == "b":
+                gym.logger.info("Undo pressed")
+                self.undo_pressed = True
+                return
+            # Handle navigation keys
+            elif k_char == "u":
+                gym.logger.info("Ghost previous pressed")
+                self.ghost_prev_pressed = True
+                return
+            elif k_char == "i":
+                gym.logger.info("Ghost next pressed")
+                self.ghost_next_pressed = True
+                return
+            elif k_char == "o":
+                gym.logger.info("Real previous pressed")
+                self.real_prev_pressed = True
+                return
+            elif k_char == "p":
+                gym.logger.info("Real next pressed")
+                self.real_next_pressed = True
+                return
+            elif k_char == "r":
+                gym.logger.info("Reset pressed")
+                self.key_enum = CollectEnum.RESET
+                return
+
             # Call parent's on_press for other keys (pass original key object)
-            super().on_press(k)
+            # super().on_press(k)
         except AttributeError:
             # Handle special keys (like ESC)
             if k == Key.esc:
@@ -67,6 +129,14 @@ class RecoveryKeyboardInterface(KeyboardInterface):
         super().reset()
         self.save_pressed = False
         self.discard_pressed = False
+        self.save_failure_pressed = False
+        self.ghost_prev_pressed = False
+        self.ghost_next_pressed = False
+        self.real_prev_pressed = False
+        self.real_next_pressed = False
+        self.show_graph_pressed = False
+        self.set_indices_pressed = False
+        self.undo_pressed = False
 
 
 class RecoveryTeleopCollector:
@@ -92,6 +162,11 @@ class RecoveryTeleopCollector:
         self.recording = True
         self.robot_settled = False
         self.starttime = None
+        
+        # OOD graph state
+        self.ood_fig = None
+        self.ood_ax = None
+        self.trajectory_data_cache = None
         
         # Timing parameters
         self.frequency = 10
@@ -209,9 +284,162 @@ class RecoveryTeleopCollector:
         data["metadata"] = self.metadata
         
         # Save to recovery directory with same name as trajectory
-        save_path = self.output_dir / f"{trajectory_name}.pkl"
+        if success:
+            output_dir = self.output_dir / "success"
+            save_path = output_dir / f"{trajectory_name}.pkl"
+        else:
+            output_dir = self.output_dir / "failure"
+            save_path = output_dir / f"{trajectory_name}.pkl"
+        output_dir.mkdir(parents=True, exist_ok=True)
         pickle_data(data, save_path)
         print(f"Data saved at {save_path}")
+    
+    def show_ood_graph(self, trajectory_data: dict):
+        """Display OOD score graph with current indices."""
+        if "out_of_distribution_scores" not in trajectory_data:
+            print("Warning: No OOD scores in trajectory data")
+            return
+        
+        ood_scores = trajectory_data["out_of_distribution_scores"]
+        in_dist_idx = self.env.in_dist_state_idx if hasattr(self.env, 'in_dist_state_idx') else 0
+        ood_idx = self.env.ood_state_idx if hasattr(self.env, 'ood_state_idx') else 0
+        
+        # Get threshold and consecutive steps if available
+        threshold = trajectory_data.get("threshold", 0.0)
+        consecutive_steps = trajectory_data.get("consecutive_steps", 1)
+        
+        # Create or update figure
+        if not hasattr(self, 'ood_fig') or self.ood_fig is None:
+            plt.ion()  # Enable interactive mode
+            self.ood_fig, self.ood_ax = plt.subplots(figsize=(12, 6))
+            self.ood_fig.canvas.manager.set_window_title('OOD Score Graph')
+        else:
+            self.ood_ax.clear()
+        
+        # Plot OOD scores
+        timesteps = np.arange(len(ood_scores))
+        self.ood_ax.plot(timesteps, ood_scores, 'b-', linewidth=2, label='OOD Score')
+        
+        # Draw threshold line
+        if threshold > 0:
+            self.ood_ax.axhline(y=threshold, color='r', linestyle='--', linewidth=2, 
+                               label=f'Threshold ({threshold:.3f})')
+        
+        # Highlight consecutive steps region
+        if ood_idx is not None and consecutive_steps > 1:
+            start_idx = max(0, ood_idx + 1)
+            end_idx = ood_idx + consecutive_steps
+            self.ood_ax.axvspan(start_idx, end_idx, alpha=0.3, color='yellow', 
+                               label=f'Consecutive Steps ({consecutive_steps})')
+        
+        # Highlight current indices
+        if in_dist_idx < len(ood_scores):
+            self.ood_ax.plot(in_dist_idx, ood_scores[in_dist_idx], 
+                           'go', markersize=15, label=f'In-Distribution (t={in_dist_idx})', zorder=5)
+            self.ood_ax.axvline(x=in_dist_idx, color='g', linestyle=':', alpha=0.5)
+        
+        if ood_idx < len(ood_scores):
+            self.ood_ax.plot(ood_idx, ood_scores[ood_idx], 
+                           'ro', markersize=15, label=f'Out-of-Distribution (t={ood_idx})', zorder=5)
+            self.ood_ax.axvline(x=ood_idx, color='r', linestyle=':', alpha=0.5)
+        
+        # Set labels and title
+        self.ood_ax.set_xlabel('Timestep', fontsize=12)
+        self.ood_ax.set_ylabel('Out-of-Distribution Score', fontsize=12)
+        self.ood_ax.set_title('OOD Score Over Time', fontsize=14, fontweight='bold')
+        self.ood_ax.grid(True, alpha=0.3)
+        
+        # Set limits
+        self.ood_ax.set_xlim(0, len(ood_scores) - 1)
+        y_max = np.max(ood_scores) * 1.1 if len(ood_scores) > 0 else 1.0
+        self.ood_ax.set_ylim(0, max(y_max, threshold * 1.2))
+        
+        # Add legend
+        self.ood_ax.legend(loc='upper right', fontsize=10)
+        
+        # Update display
+        self.ood_fig.canvas.draw()
+        self.ood_fig.canvas.flush_events()
+        plt.show(block=False)
+        
+        print(f"OOD Graph displayed: In-dist={in_dist_idx}, OOD={ood_idx}")
+    
+    def set_indices_manually(self):
+        """Manually set in-distribution and OOD indices."""
+        if self.trajectory_data_cache is None or "observations" not in self.trajectory_data_cache:
+            print("Warning: No trajectory data available")
+            return False
+        
+        max_idx = len(self.trajectory_data_cache["observations"]) - 1
+        
+        try:
+            print(f"\nCurrent indices:")
+            print(f"  In-distribution: {self.env.in_dist_state_idx if hasattr(self.env, 'in_dist_state_idx') else 'N/A'}")
+            print(f"  Out-of-distribution: {self.env.ood_state_idx if hasattr(self.env, 'ood_state_idx') else 'N/A'}")
+            print(f"  Valid range: [0, {max_idx}]")
+            
+            in_dist_input = input("Enter in-distribution index: ").strip()
+            ood_input = input("Enter out-of-distribution index: ").strip()
+            
+            in_dist_idx = int(in_dist_input)
+            ood_idx = int(ood_input)
+            
+            # Validate indices
+            if in_dist_idx < 0 or in_dist_idx > max_idx:
+                print(f"Error: In-distribution index {in_dist_idx} out of range [0, {max_idx}]")
+                return False
+            
+            if ood_idx < 0 or ood_idx > max_idx:
+                print(f"Error: Out-of-distribution index {ood_idx} out of range [0, {max_idx}]")
+                return False
+            
+            # Update environment indices
+            self.env.in_dist_state_idx = in_dist_idx
+            self.env.ood_state_idx = ood_idx
+            
+            print(f"Updated indices: In-dist={in_dist_idx}, OOD={ood_idx}")
+            
+            # Update ghost objects to new in-distribution state
+            observations = self.trajectory_data_cache["observations"]
+            in_dist_state = observations[in_dist_idx]
+            env_idx = 0  # Only support single environment
+            
+            if "robot_state" in in_dist_state:
+                self.env._update_ghost_robot_pose(env_idx, in_dist_state["robot_state"])
+            
+            if "parts_poses" in in_dist_state:
+                parts_poses = in_dist_state["parts_poses"]
+                if isinstance(parts_poses, torch.Tensor):
+                    parts_poses = parts_poses.cpu().numpy()
+                self.env._update_ghost_parts_poses(env_idx, parts_poses)
+            
+            # Update real objects to new OOD state
+            ood_state = observations[ood_idx]
+            self.env.reset_env_to(env_idx, ood_state)
+            self.env.refresh()
+            
+            # Update graph if it's open
+            if self.ood_fig is not None and plt.fignum_exists(self.ood_fig.number):
+                self.show_ood_graph(self.trajectory_data_cache)
+            
+            return True
+            
+        except ValueError as e:
+            print(f"Error: Invalid input - {e}")
+            return False
+        except Exception as e:
+            print(f"Error setting indices: {e}")
+            return False
+    
+    def undo_last_action(self):
+        """Undo the last recorded action."""
+        if len(self.transitions) > 1:  # Keep at least the initial observation
+            removed = self.transitions.pop()
+            print(f"Undone last action. Transitions: {len(self.transitions)}")
+            return True
+        else:
+            print("Cannot undo: only initial observation remains")
+            return False
     
     def collect_recovery_trajectory(self, trajectory_path: Path):
         """Collect recovery teleoperation for a single trajectory."""
@@ -220,6 +448,10 @@ class RecoveryTeleopCollector:
         print(f"\n{'='*60}")
         print(f"Starting recovery teleoperation for: {trajectory_name}")
         print(f"{'='*60}")
+        
+        # Load and cache trajectory data for graph display
+        with open(trajectory_path, 'rb') as f:
+            self.trajectory_data_cache = pickle.load(f)
         
         # Reset environment with trajectory
         obs = self.env.reset(trajectory_path=str(trajectory_path))
@@ -303,7 +535,19 @@ class RecoveryTeleopCollector:
                     (datetime.now() - self.starttime).seconds > self.start_delay
                 ):
                     self.robot_settled = True
-                    print("Robot settled, starting teleoperation")
+                    print("\nRecovery Teleoperation Controls:")
+                    print("  'r' - Reset to current trajectory (retry)")
+                    print("  's' - Save recovery trajectory (success)")
+                    print("  'f' - Save recovery trajectory (failure)")
+                    print("  'd' - Discard and move to next trajectory")
+                    print("  'g' - Show/update OOD score graph")
+                    print("  'y' - Set in-distribution and OOD indices manually")
+                    print("  'u' - Move ghost to previous state")
+                    print("  'i' - Move ghost to next state")
+                    print("  'o' - Move real to previous state")
+                    print("  'p' - Move real to next state")
+                    print("  'b' - Undo last recorded action")
+                    print("  ESC - Terminate program")
                 
                 # Calculate timing
                 t_cycle_end = t_start + (iter_idx + 1) * self.dt
@@ -337,6 +581,79 @@ class RecoveryTeleopCollector:
                 
                 # Get keyboard action
                 keyboard_action, collect_enum = self.device_interface.get_action()
+                
+                # Handle graph display
+                if hasattr(self.device_interface, 'show_graph_pressed') and self.device_interface.show_graph_pressed:
+                    if self.trajectory_data_cache is not None:
+                        self.show_ood_graph(self.trajectory_data_cache)
+                    else:
+                        print("Warning: No trajectory data available for graph")
+                    self.device_interface.show_graph_pressed = False
+                
+                # Handle set indices
+                if hasattr(self.device_interface, 'set_indices_pressed') and self.device_interface.set_indices_pressed:
+                    if self.set_indices_manually():
+                        # Update target pose after resetting real objects
+                        translation, quat_xyzw = self.env.get_ee_pose()
+                        translation, quat_xyzw = (
+                            translation.cpu().numpy().squeeze(),
+                            quat_xyzw.cpu().numpy().squeeze(),
+                        )
+                        rotvec = st.Rotation.from_quat(quat_xyzw).as_rotvec()
+                        target_pose_rv = np.array([*translation, *rotvec])
+                        target_pose_last_action_rv = None
+                    self.device_interface.set_indices_pressed = False
+                
+                # Handle undo
+                if hasattr(self.device_interface, 'undo_pressed') and self.device_interface.undo_pressed:
+                    self.undo_last_action()
+                    self.device_interface.undo_pressed = False
+                
+                # Handle navigation keys first (they don't affect collect_enum)
+                graph_needs_update = False
+                
+                if hasattr(self.device_interface, 'ghost_prev_pressed') and self.device_interface.ghost_prev_pressed:
+                    self.env.navigate_ghost_prev()
+                    self.device_interface.ghost_prev_pressed = False
+                    graph_needs_update = True
+                
+                if hasattr(self.device_interface, 'ghost_next_pressed') and self.device_interface.ghost_next_pressed:
+                    self.env.navigate_ghost_next()
+                    self.device_interface.ghost_next_pressed = False
+                    graph_needs_update = True
+                
+                if hasattr(self.device_interface, 'real_prev_pressed') and self.device_interface.real_prev_pressed:
+                    self.env.navigate_real_prev()
+                    self.device_interface.real_prev_pressed = False
+                    graph_needs_update = True
+                    # Update target pose after resetting real objects
+                    translation, quat_xyzw = self.env.get_ee_pose()
+                    translation, quat_xyzw = (
+                        translation.cpu().numpy().squeeze(),
+                        quat_xyzw.cpu().numpy().squeeze(),
+                    )
+                    rotvec = st.Rotation.from_quat(quat_xyzw).as_rotvec()
+                    target_pose_rv = np.array([*translation, *rotvec])
+                    target_pose_last_action_rv = None
+                
+                if hasattr(self.device_interface, 'real_next_pressed') and self.device_interface.real_next_pressed:
+                    self.env.navigate_real_next()
+                    self.device_interface.real_next_pressed = False
+                    graph_needs_update = True
+                    # Update target pose after resetting real objects
+                    translation, quat_xyzw = self.env.get_ee_pose()
+                    translation, quat_xyzw = (
+                        translation.cpu().numpy().squeeze(),
+                        quat_xyzw.cpu().numpy().squeeze(),
+                    )
+                    rotvec = st.Rotation.from_quat(quat_xyzw).as_rotvec()
+                    target_pose_rv = np.array([*translation, *rotvec])
+                    target_pose_last_action_rv = None
+                
+                # Update graph if navigation keys were pressed and graph is open
+                if graph_needs_update and self.ood_fig is not None and plt.fignum_exists(self.ood_fig.number):
+                    if self.trajectory_data_cache is not None:
+                        self.show_ood_graph(self.trajectory_data_cache)
                 
                 # Handle special keys
                 if collect_enum == CollectEnum.PAUSE:
@@ -390,6 +707,21 @@ class RecoveryTeleopCollector:
                             pass
                     # Return status
                     return collect_enum == CollectEnum.SUCCESS
+                
+                # Handle save failure
+                if hasattr(self.device_interface, 'save_failure_pressed') and self.device_interface.save_failure_pressed:
+                    # Save as failure
+                    self.save(trajectory_name, success=False)
+                    self.device_interface.save_failure_pressed = False
+                    
+                    # Cleanup SpaceMouse before returning
+                    if sm is not None:
+                        try:
+                            sm.__exit__(None, None, None)
+                        except Exception:
+                            pass
+                    # Return status
+                    return True
                 
                 # Handle gripper actions
                 steps_since_grasp += 1
@@ -497,6 +829,7 @@ class RecoveryTeleopCollector:
                 # Store transition
                 if self.robot_settled and self.recording and action_taken:
                     if info.get("action_success", True):
+                        print(f"[Recovery Teleoperation] Storing action {action}")
                         self.store_transition(obs, action, rew, skill_complete=0)
                 
                 obs = next_obs
@@ -573,11 +906,6 @@ def main():
     # Setup keyboard interface
     keyboard_device_interface = RecoveryKeyboardInterface()
     keyboard_device_interface.print_usage()
-    print("\nRecovery Teleoperation Controls:")
-    print("  'r' - Reset to current trajectory (retry)")
-    print("  's' - Save recovery trajectory")
-    print("  'd' - Discard and move to next trajectory")
-    print("  ESC - Terminate program")
     
     # Ensure valid randomness
     randomness = Randomness.str_to_enum(args.randomness)
