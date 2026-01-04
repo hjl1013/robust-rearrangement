@@ -221,9 +221,9 @@ def get_rl_reverse_env(
 
     if obs_keys is None:
         obs_keys = FULL_OBS
-        if observation_space == "state":
-            # Filter out keys with `image` in them
-            obs_keys = [key for key in obs_keys if "image" not in key]
+        # if observation_space == "state":
+        #     # Filter out keys with `image` in them
+        #     obs_keys = [key for key in obs_keys if "image" not in key]
 
     if action_type == "relative":
         print(
