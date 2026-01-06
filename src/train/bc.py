@@ -371,6 +371,7 @@ def main(cfg: DictConfig):
         config=config_dict,
         mode=cfg.wandb.mode,
         notes=cfg.wandb.notes,
+        save_code=False,
     )
 
     if cfg.wandb.watch_model:
@@ -556,7 +557,7 @@ def main(cfg: DictConfig):
                             act_rot_repr=cfg.control.act_rot_repr,
                             action_type=cfg.control.control_mode,
                             parts_poses_in_robot_frame=cfg.rollout.parts_poses_in_robot_frame,
-                            headless=not cfg.visualize,
+                            headless=True,
                             verbose=True,
                         )
                     else:
@@ -570,7 +571,7 @@ def main(cfg: DictConfig):
                             act_rot_repr=cfg.control.act_rot_repr,
                             action_type=cfg.control.control_mode,
                             parts_poses_in_robot_frame=cfg.rollout.parts_poses_in_robot_frame,
-                            headless=not cfg.visualize,
+                            headless=True,
                             verbose=True,
                         )
                 best_success_rate = do_rollout_evaluation(
@@ -591,7 +592,7 @@ def main(cfg: DictConfig):
                 best_test_loss = test_loss_mean
                 save_path = str(model_save_dir / f"actor_chkpt_best_test_loss.pt")
                 torch.save(save_dict, save_path)
-                wandb.save(save_path)
+                # wandb.save(save_path)
 
             # Save the model if the success rate is the best so far
             if (
@@ -601,7 +602,7 @@ def main(cfg: DictConfig):
                 prev_best_success_rate = best_success_rate
                 save_path = str(model_save_dir / f"actor_chkpt_best_success_rate.pt")
                 torch.save(save_dict, save_path)
-                wandb.save(save_path)
+                # wandb.save(save_path)
 
             if (
                 cfg.training.checkpoint_interval > 0
@@ -609,7 +610,7 @@ def main(cfg: DictConfig):
             ):
                 save_path = str(model_save_dir / f"actor_chkpt_{epoch_idx}.pt")
                 torch.save(save_dict, save_path)
-                wandb.save(save_path)
+                # wandb.save(save_path)
 
             # Run diffusion sampling on a training batch
             if (
@@ -649,7 +650,7 @@ def main(cfg: DictConfig):
         if cfg.training.store_last_model:
             save_path = str(model_save_dir / f"actor_chkpt_last.pt")
             torch.save(save_dict, save_path)
-            wandb.save(save_path)
+            # wandb.save(save_path)
 
         # If switch is enabled, copy the the shadow to the model at the end of each epoch
         if cfg.training.ema.use and cfg.training.ema.switch:

@@ -2,7 +2,7 @@ import argparse
 import os
 from pathlib import Path
 import time
-
+import isaacgym
 from gymnasium import Env
 import torch  # needs to be after isaac gym imports
 from omegaconf import DictConfig, OmegaConf
