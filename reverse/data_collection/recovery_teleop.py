@@ -458,7 +458,7 @@ class RecoveryTeleopCollector:
         self._reset_collector_buffer()
         
         # Store initial observation
-        self.store_transition(obs, setup_phase=True)
+        # self.store_transition(obs, setup_phase=True)
         
         # Wait for robot to settle
         print("Waiting for robot to settle...")
@@ -667,7 +667,7 @@ class RecoveryTeleopCollector:
                     print("Resetting to current trajectory...")
                     obs = self.env.reset(trajectory_path=str(trajectory_path))
                     self._reset_collector_buffer()
-                    self.store_transition(obs, setup_phase=True)
+                    # self.store_transition(obs, setup_phase=True)
                     self.starttime = datetime.now()
                     self.robot_settled = False
                     
