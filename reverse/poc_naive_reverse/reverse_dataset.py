@@ -84,12 +84,12 @@ def extract_ee_pose_from_obs(obs):
         
         ee_pos = robot_state[0:3]
         ee_quat = robot_state[3:7]
-        gripper_width = float(robot_state[14]) if len(robot_state) > 14 else 0.0
+        gripper_width = float(robot_state[13]) if len(robot_state) > 14 else 0.0
     
     return ee_pos, ee_quat, gripper_width
 
 
-def compute_reversed_action(obs_t, obs_t_plus_1):
+def compute_action(obs_t, obs_t_plus_1):
     """
     Compute reversed delta action from two observations.
     
@@ -178,7 +178,7 @@ def reverse_trajectory(data):
         obs_t = reversed_observations[t]  # Current state at timestep t in reversed trajectory
         obs_t_plus_1 = reversed_observations[t + 1]  # Previous state at timestep t-1 in reversed trajectory
         
-        reversed_action = compute_reversed_action(obs_t, obs_t_plus_1)
+        reversed_action = compute_action(obs_t, obs_t_plus_1)
         reversed_actions.append(reversed_action)
     
     # Reverse other keys as dummy data
